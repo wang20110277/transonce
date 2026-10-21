@@ -1,9 +1,9 @@
 """End-to-end smoke tests against a running TransOnce API.
 
-Usage (backend must be running on :8000 and seeded):
+Usage (backend must be running on :9005 and seeded):
 
     cd server && ../.venv/bin/python tests/smoke.py
-    API_BASE=http://localhost:8000 ../.venv/bin/python tests/smoke.py
+    API_BASE=http://localhost:9005 ../.venv/bin/python tests/smoke.py
 
 The suite is intentionally non-destructive: it only reads data, reveals a
 masked secret (which writes an audit log), runs a monitor health check, and
@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-API = os.getenv("API_BASE", "http://localhost:8000").rstrip("/")
+API = os.getenv("API_BASE", "http://localhost:9005").rstrip("/")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 PRODUCT_EMAIL = os.getenv("PRODUCT_EMAIL", "product@transonce.local")

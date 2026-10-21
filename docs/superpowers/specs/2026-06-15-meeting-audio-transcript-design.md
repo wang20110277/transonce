@@ -73,7 +73,7 @@ When saving a meeting whose content came from an upload, send `source: "asr"` (t
 **No changes.** Both required endpoints already exist:
 
 - `POST /asr` (ASR service, `:8001`): accepts a file upload, decodes via ffmpeg to 16 kHz mono WAV, runs SenseVoice (language fixed to `zh` via `SENSEVOICE_LANGUAGE`), strips special tokens, returns `{"text": "<transcript>"}`.
-- `POST /api/meetings` (main backend, `:8000`): accepts `{title, rawNotes, participants, source}`, inserts into the `meetings` table, returns the mapped meeting.
+- `POST /api/meetings` (main backend, `:9005`): accepts `{title, rawNotes, participants, source}`, inserts into the `meetings` table, returns the mapped meeting.
 
 ## 7. Data model
 

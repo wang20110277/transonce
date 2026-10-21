@@ -82,8 +82,10 @@ cd server
 ../.venv/bin/alembic upgrade head
 cd ..
 
-.venv/bin/uvicorn main:app --app-dir server --port 8000 --reload
+./server/run.sh        # 固定监听 http://localhost:9005
 ```
+
+后端端口固定在 `9005`（`server/run.sh` 显式传入 `--port 9005`），前端代理也指向该端口。
 
 启动时会自动执行 `seed.py`：创建超级管理员、演示租户「创新数智研发组」、角色、成员、项目、会议、需求、Agent、环境、制品、流水线、监控等数据。种子以租户 slug `innovatech` 幂等，重复启动不会重复插入。
 
@@ -95,7 +97,7 @@ npm install
 npm run dev          # http://localhost:3002（固定端口，占用则启动失败）
 ```
 
-Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直接报错，不会漂移），并将 `/api` 代理到 `http://localhost:8000`、`/asr` 代理到 `http://localhost:8001`。
+Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直接报错，不会漂移），并将 `/api` 代理到 `http://localhost:9005`、`/asr` 代理到 `http://localhost:8001`。
 
 ## 演示账号
 
@@ -170,7 +172,7 @@ npm run build
 | 监控/告警 | `/monitors`、`/monitors/{id}/check`、`/monitors/check-all`、`/alerts` |
 | Agent 对话 | `/conversations`、`/conversations/{id}/messages`、`POST /chat` |
 
-交互式文档：后端启动后访问 `http://localhost:8000/docs`。
+交互式文档：后端启动后访问 `http://localhost:9005/docs`。
 
 ## 当前阶段
 

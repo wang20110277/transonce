@@ -11,7 +11,7 @@
 ```text
 ┌──────────────┐        HTTPS / JSON        ┌──────────────────────────┐
 │  React SPA   │  ───────────────────────▶  │  FastAPI (server/)       │
-│ Vite :3002   │  ◀───────────────────────  │  :8000                   │
+│ Vite :3002   │  ◀───────────────────────  │  :9005                   │
 └──────────────┘      /api (Vite proxy)     └────────────┬─────────────┘
                                                          │ psycopg2
                                             ┌────────────▼─────────────┐
@@ -274,7 +274,7 @@ extract / design / breakdown / code / test / pipeline / deploy / monitor / autop
 cd server && ../.venv/bin/alembic upgrade head
 
 # 后端
-.venv/bin/uvicorn main:app --app-dir server --port 8000 --reload
+.venv/bin/uvicorn main:app --app-dir server --port 9005 --reload
 
 # 前端
 cd client && npm run dev

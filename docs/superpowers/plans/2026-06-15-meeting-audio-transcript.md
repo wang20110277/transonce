@@ -285,7 +285,7 @@ Expected: PASS, no output. (Covers spec §10.1.)
 
 - [ ] **Step 2: Manual — happy path (spec §10.2)**
 
-Prerequisites: ASR service running on `:8001` (`server/asr_service`), ffmpeg on `PATH`, SenseVoice model present at `server/models/SenseVoiceSmall`, and the main backend on `:8000`. Start the client with `cd client && npm run dev` (serves on `:3000`, proxies `/asr` → `:8001` and `/api` → `:8000`).
+Prerequisites: ASR service running on `:8001` (`server/asr_service`), ffmpeg on `PATH`, SenseVoice model present at `server/models/SenseVoiceSmall`, and the main backend on `:9005`. Start the client with `cd client && npm run dev` (serves on `:3000`, proxies `/asr` → `:8001` and `/api` → `:9005`).
 
 1. Open the 会议 tab.
 2. Enter a title (e.g. "V1.0 需求评审会") and optional participants.

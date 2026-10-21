@@ -198,7 +198,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/transonce
 # Agent runtime provider: claude (Claude Code --print) or opencode (opencode run)
 AGENT_PROVIDER=claude
 AGENT_TIMEOUT_MS=180000
-PORT=8000
+PORT=9005
 ```
 
 - [ ] **Step 3: Create `client/.env`**
@@ -272,7 +272,7 @@ cd server
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env        # set DATABASE_URL, AGENT_PROVIDER
-.venv/bin/uvicorn main:app --port 8000 --reload
+.venv/bin/uvicorn main:app --port 9005 --reload
 ```
 
 ### Frontend
@@ -284,7 +284,7 @@ cp .env.example .env        # set GEMINI_API_KEY if using client-side AI
 npm run dev                 # http://localhost:3000
 ```
 
-The Vite dev server proxies `/api` → `http://localhost:8000` and `/asr` → `http://localhost:8001`, so start the backend first.
+The Vite dev server proxies `/api` → `http://localhost:9005` and `/asr` → `http://localhost:8001`, so start the backend first.
 ```
 
 - [ ] **Step 2: Remove orphaned root build artifacts**
@@ -340,7 +340,7 @@ Expected: prints `backend imports OK`. (If the venv is not set up, this can be s
 
 Start the backend in one terminal:
 ```bash
-cd server && .venv/bin/uvicorn main:app --port 8000 --reload
+cd server && .venv/bin/uvicorn main:app --port 9005 --reload
 ```
 Start the frontend in another:
 ```bash

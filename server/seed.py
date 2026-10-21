@@ -127,7 +127,7 @@ def seed() -> None:
                (tenant_id, name, kind, base_url, ip, username, password_enc, config, managed_by)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (
-                tenant["id"], "测试环境", "test", "http://localhost:8000/api/health", "127.0.0.1",
+                tenant["id"], "测试环境", "test", "http://localhost:9005/api/health", "127.0.0.1",
                 "deploy", encrypt_secret("demo-pass-123"),
                 Json({"replicas": 1, "note": "演示用途"}), admin["id"],
             ),

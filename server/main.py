@@ -1,6 +1,6 @@
 """TransOnce backend — multi-tenant, agent-orchestrated SDLC platform.
 
-Run:  .venv/bin/uvicorn main:app --app-dir server --port 8000 --reload
+Run:  .venv/bin/uvicorn main:app --app-dir server --port 9005 --reload
 Schema: alembic upgrade head (server/migrations).
 """
 import logging

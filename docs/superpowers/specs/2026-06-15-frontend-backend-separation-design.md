@@ -65,7 +65,7 @@ The `dist/` build output is **deleted**, not moved — it is gitignored and rege
 ## 5. What stays / what does not change
 
 - **`server/`** — location, code, Python dependencies, Alembic migrations, and the uvicorn run command are untouched.
-- **Vite dev proxy** — `/api` → `http://localhost:8000` and `/asr` → `http://localhost:8001` point at absolute localhost ports and are unaffected by where the frontend folder lives.
+- **Vite dev proxy** — `/api` → `http://localhost:9005` and `/asr` → `http://localhost:8001` point at absolute localhost ports and are unaffected by where the frontend folder lives.
 - **The 21 `@/` imports** in the frontend — alias behavior is preserved (see §6).
 
 ## 6. Configuration changes
@@ -88,7 +88,7 @@ The current root `.env.example` mixes backend and frontend variables. After sepa
   - `DATABASE_URL`
   - `AGENT_PROVIDER` (`claude` or `opencode`)
   - `AGENT_TIMEOUT_MS`
-  - `PORT` (`8000`)
+  - `PORT` (`9005`)
 - `client/.env.example` — frontend variables:
   - `GEMINI_API_KEY` (used client-side by `src/services/gemini.ts`, injected via `define` in `vite.config.ts`)
 
@@ -114,7 +114,7 @@ Rewrite the "Run Locally" section to document the two-app setup:
 cd server
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env   # set DATABASE_URL, AGENT_PROVIDER
-.venv/bin/uvicorn main:app --port 8000 --reload
+.venv/bin/uvicorn main:app --port 9005 --reload
 
 # Frontend (Vite + React)
 cd client
@@ -127,7 +127,7 @@ npm run dev            # http://localhost:3000, proxies /api & /asr to the backe
 
 ```bash
 # Backend — unchanged
-cd server && .venv/bin/uvicorn main:app --port 8000 --reload
+cd server && .venv/bin/uvicorn main:app --port 9005 --reload
 
 # Frontend
 cd client && npm install && npm run dev   # :3000, proxies /api & /asr to backend
@@ -137,8 +137,8 @@ cd client && npm install && npm run dev   # :3000, proxies /api & /asr to backen
 
 1. `cd client && npm run lint` (`tsc --noEmit`) passes with no new errors versus the pre-move state.
 2. `cd client && npm run build` succeeds and emits `client/dist/`.
-3. `cd client && npm run dev` boots on `:3000`; a request to `/api/...` is proxied to the backend on `:8000`.
-4. `cd server && .venv/bin/uvicorn main:app --port 8000` starts unchanged.
+3. `cd client && npm run dev` boots on `:3000`; a request to `/api/...` is proxied to the backend on `:9005`.
+4. `cd server && .venv/bin/uvicorn main:app --port 9005` starts unchanged.
 5. `git status` shows the moves as renames (preserves history) for the moved files.
 
 ## 12. Out of scope
