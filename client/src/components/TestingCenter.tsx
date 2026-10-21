@@ -91,6 +91,7 @@ export function TestingCenter() {
                     <p className="text-[11px] text-muted-foreground mt-0.5">{formatDate(t.createdAt)} · {t.total} 个用例</p>
                   </div>
                   <Pill tone={t.passed === t.total ? "green" : "rose"}>{t.passed}/{t.total} 通过</Pill>
+                  {t.simulated && <Pill tone="amber">模拟</Pill>}
                   <StatusPill status={t.status} />
                 </button>
                 {open && (

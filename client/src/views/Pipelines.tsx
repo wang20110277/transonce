@@ -110,6 +110,7 @@ export function Pipelines() {
                     <p className="text-sm font-medium">{pipeline?.name ?? "流水线已删除"}</p>
                     <p className="text-[11px] text-muted-foreground mt-0.5">{formatDate(r.startedAt)}{artifact ? ` · 制品 ${artifact.name} ${artifact.version}` : ""}</p>
                   </div>
+                  {r.simulated && <Pill tone="amber">模拟</Pill>}
                   <StatusPill status={r.status} />
                 </button>
                 {open && (

@@ -75,7 +75,7 @@ export const api = {
     register: (email: string, name: string, password: string) =>
       post<{ token: string; user: AuthUser }>("/auth/register", { email, name, password }),
     me: () => get<{ user: AuthUser; memberships: TenantSummary[] }>("/auth/me"),
-    updateMe: (body: Partial<{ name: string; avatar: string; password: string }>) =>
+    updateMe: (body: Partial<{ name: string; avatar: string; password: string; currentPassword: string }>) =>
       patch<AuthUser>("/auth/me", body),
     permissions: () => get<Permission[]>("/permissions"),
   },
@@ -235,13 +235,13 @@ export const api = {
     createConversation: (tid: string, context?: Record<string, unknown>) =>
       post<Conversation>(`${T(tid)}/conversations`, { context }),
     messages: (tid: string, cid: string) => get<import("../types").ChatMessage[]>(`${T(tid)}/conversations/${cid}/messages`),
-    send: (tid: string, cid: string, content: string, context?: Record<string, unknown>) =>
+    send: (tid: string, cid: string, content: string, context?: Record<string, unknown>, confirm = false) =>
       post<{ userMessage: import("../types").ChatMessage; assistantMessage: import("../types").ChatMessage }>(
-        `${T(tid)}/conversations/${cid}/messages`, { content, context },
+        `${T(tid)}/conversations/${cid}/messages`, { content, context, confirm },
       ),
-    quick: (tid: string, content: string, context?: Record<string, unknown>, conversationId?: string) =>
+    quick: (tid: string, content: string, context?: Record<string, unknown>, conversationId?: string, confirm = false) =>
       post<{ conversation: Conversation; userMessage: import("../types").ChatMessage; assistantMessage: import("../types").ChatMessage }>(
-        `${T(tid)}/chat`, { content, context, conversationId },
+        `${T(tid)}/chat`, { content, context, conversationId, confirm },
       ),
     remove: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/conversations/${cid}`),
   },

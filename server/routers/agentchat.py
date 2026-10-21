@@ -89,8 +89,12 @@ def send_message(tenant_id: str, conversation_id: str, body: dict = Body(...), u
     if not content:
         raise HTTPException(400, "消息不能为空")
     if body.get("context") is not None:
+        # Merge rather than replace: the pending confirmation lives in the
+        # conversation context and must survive the next turn's page context.
         conv = db.execute_returning(
-            "UPDATE conversations SET context=%s WHERE id=%s RETURNING *",
+            """UPDATE conversations
+               SET context = COALESCE(context, '{}'::jsonb) || %s::jsonb
+               WHERE id=%s RETURNING *""",
             (Json(body["context"]), conversation_id),
         )
 
@@ -99,7 +103,7 @@ def send_message(tenant_id: str, conversation_id: str, body: dict = Body(...), u
         (conversation_id, content),
     )
     log_activity(ctx, "agent.chat", {"conversationId": conversation_id, "message": content[:160]})
-    assistant = orchestration.handle_chat(ctx, conv, content)
+    assistant = orchestration.handle_chat(ctx, conv, content, bool(body.get("confirm")))
     return {
         "userMessage": serializers.message(user_msg),
         "assistantMessage": assistant,
@@ -131,7 +135,7 @@ def quick_chat(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_
         "INSERT INTO messages (conversation_id, role, content) VALUES (%s, 'user', %s) RETURNING *",
         (conv["id"], content),
     )
-    assistant = orchestration.handle_chat(ctx, conv, content)
+    assistant = orchestration.handle_chat(ctx, conv, content, bool(body.get("confirm")))
     return {
         "conversation": serializers.conversation(conv),
         "userMessage": serializers.message(user_msg),

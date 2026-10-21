@@ -93,6 +93,7 @@ export function DeploymentCenter() {
                     <ExternalLink className="w-3.5 h-3.5" /> 访问
                   </a>
                 )}
+                {d.simulated && <Badgeish text="模拟" tone="gray" />}
                 <StatusPill status={d.status} />
               </Card>
             );

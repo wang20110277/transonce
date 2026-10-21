@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { AuthUser, TenantSummary } from "../types";
 import { api, getToken, setToken, onUnauthorized } from "../services/api";
+import { invalidateWorkspace } from "./store";
 
 const TENANT_KEY = "transonce.tenant";
 
@@ -112,6 +113,9 @@ export function clearTenant() {
 export function logout() {
   setToken(null);
   localStorage.removeItem(TENANT_KEY);
+  // Drop cached workspace data too: switching accounts within the same tenant
+  // must not show the previous user's requirements/deployments.
+  invalidateWorkspace();
   set({ ...initial, status: "anonymous" });
 }
 

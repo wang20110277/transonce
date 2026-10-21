@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import agents
+import db
 from config import CORS_ORIGINS, SEED_DEMO
 from routers import agentchat, auth, devops, pipeline, projects, tenants
 
@@ -23,6 +24,10 @@ log = logging.getLogger("transonce")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        db.recover_stale_runs()
+    except Exception as e:
+        log.warning("stale run recovery skipped: %s", e)
     if SEED_DEMO:
         try:
             import seed

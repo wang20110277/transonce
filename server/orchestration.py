@@ -10,6 +10,7 @@ from psycopg2.extras import Json
 
 import agents
 import db
+import net_guard
 import serializers
 from deps import TenantContext, log_activity
 from security import decrypt_secret
@@ -17,13 +18,7 @@ from security import decrypt_secret
 
 # --- agent helpers -------------------------------------------------------
 
-def ensure_personal_agent(ctx: TenantContext) -> dict:
-    agent = db.fetch_one(
-        "SELECT * FROM agents WHERE tenant_id = %s AND owner_user_id = %s",
-        (ctx.tenant["id"], ctx.user["id"]),
-    )
-    if agent:
-        return agent
+def personal_agent_defaults(ctx: TenantContext) -> dict:
     role_name = (ctx.role or {}).get("name") or "成员"
     prompt = (
         f"你是 {ctx.user['name']} 在租户「{ctx.tenant['name']}」中的专属研发 Agent，"
@@ -32,24 +27,75 @@ def ensure_personal_agent(ctx: TenantContext) -> dict:
         "严格遵守租户权限：不读取、不修改、不部署你无权访问的租户资源；"
         "生产发布、环境 IP/密码、成员与角色变更必须由人工确认或管理员维护。"
     )
+    return {
+        "name": f"{ctx.user['name']} 的研发 Agent",
+        "provider": "auto",
+        "model": None,
+        "description": f"负责 {role_name} 相关工作的个人智能体",
+        "system_prompt": prompt,
+        "tools": ["meeting", "requirement", "design", "task", "code", "test", "pipeline", "deploy", "monitor"],
+    }
+
+
+def ensure_personal_agent(ctx: TenantContext) -> dict:
+    agent = db.fetch_one(
+        "SELECT * FROM agents WHERE tenant_id = %s AND owner_user_id = %s",
+        (ctx.tenant["id"], ctx.user["id"]),
+    )
+    if agent:
+        return agent
+    defaults = personal_agent_defaults(ctx)
     agent = db.execute_returning(
         """INSERT INTO agents
            (tenant_id, owner_user_id, name, provider, model, description, system_prompt, tools)
-           VALUES (%s, %s, %s, 'auto', NULL, %s, %s, %s) RETURNING *""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
         (
             ctx.tenant["id"],
             ctx.user["id"],
-            f"{ctx.user['name']} 的研发 Agent",
-            f"负责 {role_name} 相关工作的个人智能体",
-            prompt,
-            Json(["meeting", "requirement", "design", "task", "code", "test", "pipeline", "deploy", "monitor"]),
+            defaults["name"],
+            defaults["provider"],
+            defaults["model"],
+            defaults["description"],
+            defaults["system_prompt"],
+            Json(defaults["tools"]),
         ),
     )
     return agent
 
 
+def reset_personal_agent(ctx: TenantContext) -> dict:
+    """Restore the personal agent without deleting it.
+
+    `agents` is referenced by `conversations` with ON DELETE CASCADE, so a hard
+    delete would silently erase the user's chat history.
+    """
+    agent = ensure_personal_agent(ctx)
+    defaults = personal_agent_defaults(ctx)
+    return db.execute_returning(
+        """UPDATE agents
+           SET name=%s, provider=%s, model=%s, description=%s, system_prompt=%s, tools=%s
+           WHERE id=%s RETURNING *""",
+        (
+            defaults["name"],
+            defaults["provider"],
+            defaults["model"],
+            defaults["description"],
+            defaults["system_prompt"],
+            Json(defaults["tools"]),
+            agent["id"],
+        ),
+    )
+
+
 def start_run(ctx: TenantContext, task_type: str, input_text: str, agent_id: str | None = None) -> dict:
-    agent = db.fetch_one("SELECT * FROM agents WHERE id = %s", (agent_id,)) if agent_id else ensure_personal_agent(ctx)
+    agent = (
+        db.fetch_one(
+            "SELECT * FROM agents WHERE id=%s AND tenant_id=%s",
+            (agent_id, ctx.tenant["id"]),
+        )
+        if agent_id
+        else ensure_personal_agent(ctx)
+    )
     run = db.execute_returning(
         """INSERT INTO agent_runs
            (tenant_id, agent_id, task_type, status, input, events, created_by)
@@ -211,8 +257,15 @@ def test_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
             req["title"], req.get("description") or "",
             req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
         )
+        # No test executor is wired yet: cases are generated, not executed.
         run_cases = [
-            {"id": f"tc_{i}", "title": c.get("title"), "type": c.get("type", "unit"), "passed": True}
+            {
+                "id": f"tc_{i}",
+                "title": c.get("title"),
+                "type": c.get("type", "unit"),
+                "passed": True,
+                "simulated": True,
+            }
             for i, c in enumerate(cases, 1)
         ]
         row = db.execute_returning(
@@ -224,7 +277,7 @@ def test_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
                 len(run_cases), len(run_cases), started["run"]["id"],
             ),
         )
-        finish_run(started["run"], "succeeded", f"{len(run_cases)} 个用例全部通过")
+        finish_run(started["run"], "succeeded", f"{len(run_cases)} 个用例已生成（模拟执行）")
         log_activity(ctx, "test.run", {"requirementId": req["id"], "passed": len(run_cases), "total": len(run_cases)}, "agent", (started["agent"] or {}).get("name"), tenant_id=ctx.tenant["id"])
         return serializers.test_run(row)
     except Exception as e:
@@ -268,6 +321,7 @@ def run_pipeline(ctx: TenantContext, pipeline: dict, artifact_id: str | None = N
             "name": stage.get("name"),
             "command": stage.get("command"),
             "status": status,
+            "simulated": True,
             "durationMs": int((time.time() - t0) * 1000) + 120,
         })
         logs.append(f"[{stage.get('name')}] {detail}")
@@ -324,6 +378,16 @@ def deploy_artifact(
 
 # --- stage: monitoring / alerting ---------------------------------------
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A health check must not follow redirects into internal targets."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_SAFE_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
     url = monitor["url"]
     if not url.startswith("http"):
@@ -333,12 +397,20 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
     latency = None
     error = None
     try:
+        envs = db.fetch_all(
+            "SELECT base_url, ip FROM environments WHERE tenant_id=%s", (ctx.tenant["id"],)
+        )
+        url = net_guard.validate_url(url, net_guard.targets_from_environments(envs))
         req = urllib.request.Request(url, method=monitor.get("method") or "GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _SAFE_OPENER.open(req, timeout=5) as resp:
             latency = int((time.time() - t0) * 1000)
+            resp.read(8192)
             status = "up" if resp.status == (monitor.get("expected_status") or 200) else "down"
             if status == "down":
                 error = f"HTTP {resp.status}"
+    except net_guard.UnsafeTarget as e:
+        error = f"目标被安全策略拒绝：{e}"
+        latency = int((time.time() - t0) * 1000)
     except Exception as e:
         error = str(e)[:400]
         latency = int((time.time() - t0) * 1000)
@@ -375,29 +447,78 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
 def autopilot(
     ctx: TenantContext, req: dict, environment: dict | None = None, deploy: bool = True
 ) -> dict:
-    """Drive a requirement through design → tasks → code → test → pipeline → deploy."""
-    steps = []
+    """Drive a requirement through design → tasks → code → test → pipeline → deploy.
+
+    Every stage is isolated: a failure is recorded in `steps` and stops the run
+    without leaving the requirement marked as completed.
+    """
+    steps: list[dict] = []
+    outcome = {
+        "requirementId": req["id"],
+        "ok": False,
+        "steps": steps,
+        "artifact": None,
+        "testRun": None,
+        "pipelineRun": None,
+        "deployment": None,
+    }
+
+    def stage(name: str, fn, describe) -> object | None:
+        try:
+            value = fn()
+        except Exception as e:
+            steps.append({"stage": name, "ok": False, "detail": str(e)[:300]})
+            return None
+        steps.append({"stage": name, "ok": True, "detail": describe(value)})
+        return value
+
     req = db.fetch_one("SELECT * FROM requirements WHERE id=%s", (req["id"],))
 
-    designed = design_requirement(ctx, req)
-    steps.append({"stage": "design", "ok": True, "detail": "原型与架构已生成"})
+    designed = stage("design", lambda: design_requirement(ctx, req), lambda _: "原型与架构已生成")
+    if designed is None:
+        return outcome
     req = db.fetch_one("SELECT * FROM requirements WHERE id=%s", (req["id"],))
 
-    tasks = breakdown_requirement(ctx, req)
-    steps.append({"stage": "breakdown", "ok": True, "detail": f"{len(tasks)} 个研发任务"})
+    tasks = stage(
+        "breakdown",
+        lambda: breakdown_requirement(ctx, req),
+        lambda value: f"{len(value)} 个研发任务",
+    )
+    if tasks is None:
+        return outcome
 
-    artifact = code_requirement(ctx, req)
-    steps.append({"stage": "code", "ok": True, "detail": f"制品 {artifact['name']} {artifact['version']}"})
+    artifact = stage(
+        "code",
+        lambda: code_requirement(ctx, req),
+        lambda value: f"制品 {value['name']} {value['version']}",
+    )
+    if artifact is None:
+        return outcome
+    outcome["artifact"] = artifact
 
-    test_run = test_requirement(ctx, req)
-    steps.append({"stage": "test", "ok": True, "detail": f"{test_run['passed']}/{test_run['total']} 通过"})
+    test_run = stage(
+        "test",
+        lambda: test_requirement(ctx, req),
+        lambda value: f"{value['passed']}/{value['total']} 通过（模拟）",
+    )
+    if test_run is None:
+        return outcome
+    outcome["testRun"] = test_run
 
     agent = ensure_personal_agent(ctx)
     pipeline = ensure_pipeline(ctx, req, agent)
-    run = run_pipeline(ctx, pipeline, artifact["id"])
-    steps.append({"stage": "pipeline", "ok": run["status"] == "succeeded", "detail": f"{len(run['stages'])} 个阶段"})
+    run = stage(
+        "pipeline",
+        lambda: run_pipeline(ctx, pipeline, artifact["id"]),
+        lambda value: f"{len(value['stages'])} 个阶段（模拟执行）",
+    )
+    if run is None:
+        return outcome
+    outcome["pipelineRun"] = run
+    if run.get("status") != "succeeded":
+        steps.append({"stage": "pipeline", "ok": False, "detail": f"流水线状态 {run.get('status')}"})
+        return outcome
 
-    dep = None
     if deploy:
         if environment is None:
             environment = db.fetch_one(
@@ -406,20 +527,26 @@ def autopilot(
                 (ctx.tenant["id"],),
             )
         if environment:
-            dep = deploy_artifact(ctx, artifact, environment)
-            steps.append({"stage": "deploy", "ok": True, "detail": f"已部署到 {environment['name']}"})
+            dep = stage(
+                "deploy",
+                lambda: deploy_artifact(ctx, artifact, environment),
+                lambda _: f"已部署到 {environment['name']}",
+            )
+            if dep is None:
+                return outcome
+            outcome["deployment"] = dep
         else:
-            steps.append({"stage": "deploy", "ok": False, "detail": "未配置测试环境，需管理员在「环境配置」维护 IP/密钥后重试"})
+            steps.append({
+                "stage": "deploy",
+                "ok": False,
+                "detail": "未配置测试环境，需管理员在「环境配置」维护 IP/密钥后重试",
+            })
+            return outcome
 
-    db.execute("UPDATE requirements SET status='completed' WHERE id=%s", (req["id"],))
-    return {
-        "requirementId": req["id"],
-        "steps": steps,
-        "artifact": artifact,
-        "testRun": test_run,
-        "pipelineRun": run,
-        "deployment": dep,
-    }
+    outcome["ok"] = all(s["ok"] for s in steps)
+    if outcome["ok"]:
+        db.execute("UPDATE requirements SET status='completed' WHERE id=%s", (req["id"],))
+    return outcome
 
 
 # --- chat intent router --------------------------------------------------
@@ -429,7 +556,7 @@ INTENTS = [
     ("design", ("原型", "架构", "设计", "prototype", "architecture")),
     ("breakdown", ("拆解", "任务", "分解", "breakdown")),
     ("code", ("编码", "代码", "开发", "实现", "code")),
-    ("test", ("测试", "用例", "验证", "test")),
+    ("test", ("测试用例", "用例", "跑测试", "执行测试", "测试一下", "验证", "test")),
     ("pipeline", ("流水线", "ci/cd", "cicd", "构建", "pipeline", "ci ")),
     ("deploy", ("部署", "上线", "发布", "下发", "deploy")),
     ("monitor", ("监控", "告警", "巡检", "健康", "monitor")),
@@ -437,8 +564,21 @@ INTENTS = [
 ]
 
 
+# Intents that mutate external state and therefore need explicit confirmation.
+CONFIRM_INTENTS = {"deploy", "autopilot"}
+
+QUESTION_HINTS = (
+    "怎么", "如何", "是什么", "为什么", "能否", "是否可以", "介绍", "说明",
+    "流程", "区别", "吗？", "吗?",
+)
+
+
 def classify(message: str) -> str:
-    m = message.lower()
+    m = message.strip().lower()
+    # A question is never an instruction: never deploy because someone asked
+    # "how does deployment work?".
+    if m.endswith(("?", "？")) or any(k in m for k in QUESTION_HINTS):
+        return "chat"
     for intent, keys in INTENTS:
         if any(k in m for k in keys):
             return intent
@@ -458,7 +598,8 @@ def _context_requirement(ctx: TenantContext, message: str, context: dict) -> dic
     for r in rows:
         if r["title"] and r["title"] in message:
             return r
-    return rows[0] if rows else None
+    # Only auto-select when there is exactly one candidate; otherwise ask.
+    return rows[0] if len(rows) == 1 else None
 
 
 def _context_environment(ctx: TenantContext, message: str, context: dict) -> dict | None:
@@ -478,9 +619,128 @@ def _context_environment(ctx: TenantContext, message: str, context: dict) -> dic
     )
 
 
-def handle_chat(ctx: TenantContext, conversation: dict, message: str) -> dict:
-    intent = classify(message)
+def _build_preview(ctx: TenantContext, intent: str, message: str, context: dict) -> dict:
+    """Describe a destructive action without executing it."""
+    req = _context_requirement(ctx, message, context)
+    if not req:
+        return {
+            "error": "当前有多条需求或尚未选择需求。请先在「需求管理」选中一条，"
+            "或在消息中带上完整需求标题后再试。"
+        }
+    env = _context_environment(ctx, message, context)
+
+    if intent == "deploy":
+        artifact = db.fetch_one(
+            """SELECT * FROM artifacts WHERE requirement_id=%s AND tenant_id=%s
+               ORDER BY created_at DESC LIMIT 1""",
+            (req["id"], ctx.tenant["id"]),
+        )
+        if not artifact:
+            return {"error": f"「{req['title']}」还没有可部署的制品，请先执行编码。"}
+        if not env:
+            return {"error": "当前租户还没有可用环境，请管理员先在「环境配置」维护。"}
+        prod = env.get("kind") == "production"
+        summary = f"部署 {artifact['name']} {artifact['version']} → {env['name']}"
+        reply = (
+            f"待确认：将把制品「{artifact['name']} {artifact['version']}」部署到"
+            f"「{env['name']}」{'（生产环境，不可逆）' if prod else ''}。"
+            "点击「确认执行」或回复“确认”后才会真正执行。"
+        )
+        return {
+            "reply": reply,
+            "summary": summary,
+            "requirementId": str(req["id"]),
+            "environmentId": str(env["id"]),
+        }
+
+    if env is None:
+        env = db.fetch_one(
+            """SELECT * FROM environments WHERE tenant_id=%s AND kind IN ('test','staging')
+               ORDER BY CASE kind WHEN 'test' THEN 0 ELSE 1 END LIMIT 1""",
+            (ctx.tenant["id"],),
+        )
+    target = env["name"] if env else "（未配置环境，部署步骤会失败）"
+    return {
+        "reply": (
+            f"待确认：将对「{req['title']}」执行 设计 → 拆解 → 编码 → 测试 → 流水线 → 部署到"
+            f"「{target}」。点击「确认执行」或回复“确认”后才会真正执行。"
+        ),
+        "summary": f"端到端研发：{req['title']} → {target}",
+        "requirementId": str(req["id"]),
+        "environmentId": str(env["id"]) if env else None,
+    }
+
+
+def _persist_message(conversation: dict, reply: str, intent: str, result: dict) -> dict:
+    assistant = db.execute_returning(
+        """INSERT INTO messages (conversation_id, role, content, intent, action_result)
+           VALUES (%s, 'assistant', %s, %s, %s) RETURNING *""",
+        (conversation["id"], reply, intent, Json(result or {})),
+    )
+    db.execute("UPDATE conversations SET updated_at=now() WHERE id=%s", (conversation["id"],))
+    return serializers.message(assistant)
+
+
+def handle_chat(
+    ctx: TenantContext, conversation: dict, message: str, confirm: bool = False
+) -> dict:
     context = conversation.get("context") or {}
+    pending = context.get("pendingAction") or {}
+    intent = classify(message)
+
+    if (
+        not confirm
+        and pending
+        and message.strip() in ("取消", "cancel", "算了", "不执行")
+    ):
+        context.pop("pendingAction", None)
+        conversation["context"] = context
+        db.execute(
+            "UPDATE conversations SET context=%s WHERE id=%s",
+            (Json(context), conversation["id"]),
+        )
+        return _persist_message(conversation, "已取消，未执行任何操作。", "cancel", {"kind": "cancelled"})
+
+    if confirm:
+        intent = pending.get("intent") or context.get("intent") or intent
+        context = {
+            **context,
+            **{
+                k: pending[k]
+                for k in ("requirementId", "environmentId")
+                if pending.get(k)
+            },
+        }
+    # Destructive actions need an explicit second turn.
+    if intent in CONFIRM_INTENTS and not confirm:
+        preview = _build_preview(ctx, intent, message, context)
+        if preview.get("error"):
+            return _persist_message(
+                conversation, preview["error"], intent,
+                {"kind": "confirm", "intent": intent, "error": preview["error"]},
+            )
+        context["pendingAction"] = {
+            "intent": intent,
+            "requirementId": preview.get("requirementId"),
+            "environmentId": preview.get("environmentId"),
+            "at": _now(),
+        }
+        conversation["context"] = context
+        db.execute(
+            "UPDATE conversations SET context=%s WHERE id=%s",
+            (Json(context), conversation["id"]),
+        )
+        return _persist_message(
+            conversation, preview["reply"], intent,
+            {
+                "kind": "confirm",
+                "intent": intent,
+                "summary": preview["summary"],
+                "requirementId": preview.get("requirementId"),
+                "environmentId": preview.get("environmentId"),
+            },
+        )
+
     agent = ensure_personal_agent(ctx)
     result = None
     reply = ""
@@ -551,7 +811,7 @@ def handle_chat(ctx: TenantContext, conversation: dict, message: str) -> dict:
             else:
                 run = test_requirement(ctx, req)
                 result = {"kind": "testRun", "item": run}
-                reply = f"已为「{req['title']}」生成 {run['total']} 个测试用例，全部通过（{run['passed']}/{run['total']}）。"
+                reply = f"已为「{req['title']}」生成 {run['total']} 个测试用例（{run['passed']}/{run['total']} 通过，模拟执行，未运行真实测试）。"
 
         elif intent == "pipeline":
             req = _context_requirement(ctx, message, context)
@@ -565,7 +825,7 @@ def handle_chat(ctx: TenantContext, conversation: dict, message: str) -> dict:
                 )
                 run = run_pipeline(ctx, pipeline, str(artifact["id"]) if artifact else None)
                 result = {"kind": "pipelineRun", "item": run, "pipeline": serializers.pipeline(pipeline)}
-                reply = f"流水线「{pipeline['name']}」已执行 {len(run['stages'])} 个阶段，状态：{run['status']}。制品已标记为 released。"
+                reply = f"流水线「{pipeline['name']}」已执行 {len(run['stages'])} 个阶段（模拟执行，未连接真实 CI），状态：{run['status']}。制品已标记为 released。"
 
         elif intent == "deploy":
             req = _context_requirement(ctx, message, context)
@@ -588,7 +848,7 @@ def handle_chat(ctx: TenantContext, conversation: dict, message: str) -> dict:
             else:
                 dep = deploy_artifact(ctx, artifact, env)
                 result = {"kind": "deployment", "item": dep}
-                reply = f"已将制品 {artifact['name']} {artifact['version']} 部署到「{env['name']}」，访问地址：{dep.get('url') or '未配置'}。"
+                reply = f"已记录制品 {artifact['name']} {artifact['version']} 到「{env['name']}」的部署（模拟执行，未连接目标主机），访问地址：{dep.get('url') or '未配置'}。"
 
         elif intent == "monitor":
             monitors = db.fetch_all(
@@ -637,10 +897,11 @@ def handle_chat(ctx: TenantContext, conversation: dict, message: str) -> dict:
         reply = f"执行失败：{e}。可以重试，或改用更具体的指令（例如指定需求标题）。"
         result = {"kind": "error", "error": str(e)}
 
-    assistant = db.execute_returning(
-        """INSERT INTO messages (conversation_id, role, content, intent, action_result)
-           VALUES (%s, 'assistant', %s, %s, %s) RETURNING *""",
-        (conversation["id"], reply, intent, Json(result or {})),
-    )
-    db.execute("UPDATE conversations SET updated_at=now() WHERE id=%s", (conversation["id"],))
-    return serializers.message(assistant)
+    if confirm and context.get("pendingAction"):
+        context.pop("pendingAction", None)
+        conversation["context"] = context
+        db.execute(
+            "UPDATE conversations SET context=%s WHERE id=%s",
+            (Json(context), conversation["id"]),
+        )
+    return _persist_message(conversation, reply, intent, result or {})

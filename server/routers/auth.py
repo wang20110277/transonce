@@ -1,7 +1,8 @@
 """Authentication and current-user endpoints."""
 import re
+import time
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 import db
 import serializers
@@ -12,6 +13,33 @@ from security import create_token, hash_password, verify_password
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Simple in-process brute-force guard. A multi-worker deployment should move
+# this to Redis, but it removes the trivial "try passwords forever" window.
+LOGIN_WINDOW_SECONDS = 600
+LOGIN_MAX_FAILURES = 8
+_login_failures: dict[str, list[float]] = {}
+
+
+def _rate_limit_key(request: Request, email: str) -> str:
+    ip = request.client.host if request.client else "unknown"
+    return f"{ip}|{email}"
+
+
+def _assert_login_allowed(key: str) -> None:
+    now = time.monotonic()
+    recent = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+    _login_failures[key] = recent
+    if len(_login_failures) > 5000:
+        # Bound memory under email-spray attempts.
+        stale = [
+            k for k, v in _login_failures.items()
+            if not v or now - v[-1] >= LOGIN_WINDOW_SECONDS
+        ]
+        for k in stale:
+            _login_failures.pop(k, None)
+    if len(recent) >= LOGIN_MAX_FAILURES:
+        raise HTTPException(429, "登录尝试次数过多，请 10 分钟后再试")
 
 
 def _public_user(user: dict) -> dict:
@@ -86,13 +114,17 @@ def register(body: dict = Body(...)):
 
 
 @router.post("/login")
-def login(body: dict = Body(...)):
+def login(request: Request, body: dict = Body(...)):
     email = (body.get("email") or "").strip().lower()
+    key = _rate_limit_key(request, email)
+    _assert_login_allowed(key)
     user = db.fetch_one("SELECT * FROM users WHERE lower(email)=lower(%s)", (email,))
     if not user or not verify_password(body.get("password") or "", user["password_hash"]):
+        _login_failures.setdefault(key, []).append(time.monotonic())
         raise HTTPException(401, "邮箱或密码错误")
     if user.get("status") == "disabled":
         raise HTTPException(403, "账号已被禁用")
+    _login_failures.pop(key, None)
     return {"token": create_token(str(user["id"])), "user": _public_user(user)}
 
 
@@ -112,6 +144,9 @@ def update_me(body: dict = Body(...), user: dict = Depends(get_current_user)):
     if password is not None:
         if len(password) < 6:
             raise HTTPException(400, "密码至少 6 位")
+        # A valid session alone must not be enough to lock the real owner out.
+        if not verify_password(body.get("currentPassword") or "", user["password_hash"]):
+            raise HTTPException(400, "当前密码不正确")
         db.execute(
             "UPDATE users SET name=%s, avatar=%s, password_hash=%s WHERE id=%s",
             (name, avatar, hash_password(password), user["id"]),

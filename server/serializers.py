@@ -1,5 +1,8 @@
 """Row → API (camelCase) serializers shared by all routers."""
+from config import EXECUTION_MODE
 from security import decrypt_secret, mask_secret
+
+SIMULATED = EXECUTION_MODE != "real"
 
 
 def _s(v):
@@ -49,12 +52,12 @@ def role(r: dict) -> dict:
     }
 
 
-def member(r: dict) -> dict:
+def member(r: dict, include_email: bool = True) -> dict:
     return {
         "id": _s(r["id"]),
         "userId": _s(r["user_id"]),
         "name": r.get("name"),
-        "email": r.get("email"),
+        "email": r.get("email") if include_email else None,
         "avatar": r.get("avatar"),
         "roleId": _s(r.get("role_id")),
         "roleName": r.get("role_name"),
@@ -254,6 +257,7 @@ def test_run(r: dict) -> dict:
         "passed": r.get("passed") or 0,
         "total": r.get("total") or 0,
         "agentRunId": _s(r.get("agent_run_id")),
+        "simulated": SIMULATED,
         "createdAt": _iso(r.get("created_at")),
     }
 
@@ -298,6 +302,7 @@ def pipeline_run(r: dict) -> dict:
         "status": r.get("status"),
         "stages": r.get("stages") or [],
         "log": r.get("log"),
+        "simulated": SIMULATED,
         "startedAt": _iso(r.get("started_at")),
         "endedAt": _iso(r.get("ended_at")),
     }
@@ -314,6 +319,7 @@ def deployment(r: dict) -> dict:
         "status": r.get("status"),
         "url": r.get("url"),
         "notes": r.get("notes"),
+        "simulated": SIMULATED,
         "deployedAt": _iso(r.get("deployed_at")),
         "createdAt": _iso(r.get("created_at")),
     }

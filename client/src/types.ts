@@ -250,9 +250,10 @@ export type TestRun = {
   id: string;
   requirementId: string;
   status: "pending" | "running" | "passed" | "failed";
-  cases: { id: string; title: string; type: string; passed: boolean }[];
+  cases: { id: string; title: string; type: string; passed: boolean; simulated?: boolean }[];
   passed: number;
   total: number;
+  simulated?: boolean;
   agentRunId?: string | null;
   createdAt: string;
 };
@@ -299,6 +300,7 @@ export type PipelineRun = {
   status: "running" | "succeeded" | "failed";
   stages: PipelineStage[];
   log?: string | null;
+  simulated?: boolean;
   startedAt: string;
   endedAt?: string | null;
 };
@@ -327,6 +329,7 @@ export type Deployment = {
   status: "pending" | "success" | "failed";
   url?: string | null;
   notes?: string | null;
+  simulated?: boolean;
   deployedAt: string;
 };
 

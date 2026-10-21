@@ -11,12 +11,42 @@ from deps import get_current_user, load_tenant_context, log_activity
 router = APIRouter(prefix="/api/tenants/{tenant_id}", tags=["pipeline"])
 
 
+def _assert_project(tenant_id: str, project_id: str | None) -> None:
+    if project_id and not db.fetch_one(
+        "SELECT id FROM projects WHERE id=%s AND tenant_id=%s", (project_id, tenant_id)
+    ):
+        raise HTTPException(400, "项目不存在或不属于当前租户")
+
+
+def _assert_meeting(tenant_id: str, meeting_id: str | None) -> None:
+    if meeting_id and not db.fetch_one(
+        "SELECT id FROM meetings WHERE id=%s AND tenant_id=%s", (meeting_id, tenant_id)
+    ):
+        raise HTTPException(400, "会议不存在或不属于当前租户")
+
+
+def _assert_requirement(tenant_id: str, requirement_id: str | None) -> None:
+    if requirement_id and not db.fetch_one(
+        "SELECT id FROM requirements WHERE id=%s AND tenant_id=%s",
+        (requirement_id, tenant_id),
+    ):
+        raise HTTPException(400, "需求不存在或不属于当前租户")
+
+
 # --- meetings ------------------------------------------------------------
 
 @router.get("/meetings")
-def list_meetings(tenant_id: str, user: dict = Depends(get_current_user)):
+def list_meetings(
+    tenant_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(get_current_user),
+):
     load_tenant_context(user, tenant_id, "meetings")
-    rows = db.fetch_all("SELECT * FROM meetings WHERE tenant_id=%s ORDER BY created_at DESC", (tenant_id,))
+    rows = db.fetch_all(
+        "SELECT * FROM meetings WHERE tenant_id=%s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+        (tenant_id, limit, offset),
+    )
     return [serializers.meeting(r) for r in rows]
 
 
@@ -27,6 +57,7 @@ def create_meeting(tenant_id: str, body: dict = Body(...), user: dict = Depends(
     notes = body.get("rawNotes") or body.get("notes") or ""
     if not title or not notes.strip():
         raise HTTPException(400, "请填写会议标题与纪要内容")
+    _assert_project(tenant_id, body.get("projectId"))
     row = db.execute_returning(
         """INSERT INTO meetings
            (tenant_id, project_id, title, raw_notes, transcript, participants, source, created_by)
@@ -89,7 +120,10 @@ def extract_meeting(
 @router.get("/requirements")
 def list_requirements(
     tenant_id: str, project_id: str | None = Query(default=None),
-    status: str | None = Query(default=None), user: dict = Depends(get_current_user),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(get_current_user),
 ):
     load_tenant_context(user, tenant_id, "requirements")
     where = "WHERE tenant_id=%s"
@@ -100,7 +134,11 @@ def list_requirements(
     if status:
         where += " AND status=%s"
         args.append(status)
-    rows = db.fetch_all(f"SELECT * FROM requirements {where} ORDER BY created_at DESC", tuple(args))
+    args.extend([limit, offset])
+    rows = db.fetch_all(
+        f"SELECT * FROM requirements {where} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+        tuple(args),
+    )
     return [serializers.requirement(r) for r in rows]
 
 
@@ -113,6 +151,8 @@ def create_requirements(tenant_id: str, body: dict | list = Body(...), user: dic
         title = (item.get("title") or "").strip()
         if not title:
             continue
+        _assert_project(tenant_id, item.get("projectId"))
+        _assert_meeting(tenant_id, item.get("sourceMeetingId"))
         row = db.execute_returning(
             """INSERT INTO requirements
                (tenant_id, project_id, title, description, priority, acceptance_criteria,
@@ -149,6 +189,7 @@ def update_requirement(tenant_id: str, requirement_id: str, body: dict = Body(..
     )
     if not row:
         raise HTTPException(404, "需求不存在")
+    _assert_project(tenant_id, body.get("projectId"))
     updated = db.execute_returning(
         """UPDATE requirements
            SET title=%s, description=%s, status=%s, priority=%s, acceptance_criteria=%s, project_id=%s
@@ -219,22 +260,32 @@ def autopilot(tenant_id: str, requirement_id: str, body: dict = Body(default={})
             "SELECT * FROM environments WHERE id=%s AND tenant_id=%s",
             (body["environmentId"], tenant_id),
         )
+        if not env:
+            raise HTTPException(400, "环境不存在或不属于当前租户")
     return orchestration.autopilot(ctx, req, env, bool(body.get("deploy", True)))
 
 
 # --- tasks ---------------------------------------------------------------
 
 @router.get("/tasks")
-def list_tasks(tenant_id: str, requirement_id: str | None = Query(default=None), user: dict = Depends(get_current_user)):
+def list_tasks(
+    tenant_id: str,
+    requirement_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(get_current_user),
+):
     load_tenant_context(user, tenant_id, "development")
     if requirement_id:
         rows = db.fetch_all(
-            "SELECT * FROM dev_tasks WHERE tenant_id=%s AND requirement_id=%s ORDER BY created_at",
-            (tenant_id, requirement_id),
+            "SELECT * FROM dev_tasks WHERE tenant_id=%s AND requirement_id=%s"
+            " ORDER BY created_at LIMIT %s OFFSET %s",
+            (tenant_id, requirement_id, limit, offset),
         )
     else:
         rows = db.fetch_all(
-            "SELECT * FROM dev_tasks WHERE tenant_id=%s ORDER BY created_at DESC", (tenant_id,)
+            "SELECT * FROM dev_tasks WHERE tenant_id=%s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (tenant_id, limit, offset),
         )
     return [serializers.task(r) for r in rows]
 
@@ -270,15 +321,24 @@ def run_task(tenant_id: str, task_id: str, user: dict = Depends(get_current_user
 # --- test runs -----------------------------------------------------------
 
 @router.get("/test-runs")
-def list_test_runs(tenant_id: str, user: dict = Depends(get_current_user)):
+def list_test_runs(
+    tenant_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(get_current_user),
+):
     load_tenant_context(user, tenant_id, "testing")
-    rows = db.fetch_all("SELECT * FROM test_runs WHERE tenant_id=%s ORDER BY created_at DESC", (tenant_id,))
+    rows = db.fetch_all(
+        "SELECT * FROM test_runs WHERE tenant_id=%s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+        (tenant_id, limit, offset),
+    )
     return [serializers.test_run(r) for r in rows]
 
 
 @router.post("/test-runs")
 def create_test_run(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "testing")
+    _assert_requirement(tenant_id, body.get("requirementId"))
     cases = body.get("cases") or []
     row = db.execute_returning(
         """INSERT INTO test_runs (tenant_id, requirement_id, status, cases, passed, total)
@@ -295,12 +355,27 @@ def create_test_run(tenant_id: str, body: dict = Body(...), user: dict = Depends
 # --- agent runs ----------------------------------------------------------
 
 @router.get("/agent-runs")
-def list_agent_runs(tenant_id: str, limit: int = 50, user: dict = Depends(get_current_user)):
-    load_tenant_context(user, tenant_id)
-    rows = db.fetch_all(
-        """SELECT r.*, a.name AS agent_name FROM agent_runs r
-           LEFT JOIN agents a ON a.id=r.agent_id
-           WHERE r.tenant_id=%s ORDER BY r.started_at DESC LIMIT %s""",
-        (tenant_id, min(limit, 200)),
-    )
+def list_agent_runs(
+    tenant_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(get_current_user),
+):
+    ctx = load_tenant_context(user, tenant_id)
+    if ctx.has("agent.manage"):
+        rows = db.fetch_all(
+            """SELECT r.*, a.name AS agent_name FROM agent_runs r
+               LEFT JOIN agents a ON a.id=r.agent_id
+               WHERE r.tenant_id=%s ORDER BY r.started_at DESC LIMIT %s OFFSET %s""",
+            (tenant_id, limit, offset),
+        )
+    else:
+        # Members only see runs they triggered (their own agent's work).
+        rows = db.fetch_all(
+            """SELECT r.*, a.name AS agent_name FROM agent_runs r
+               LEFT JOIN agents a ON a.id=r.agent_id
+               WHERE r.tenant_id=%s AND r.created_by=%s
+               ORDER BY r.started_at DESC LIMIT %s OFFSET %s""",
+            (tenant_id, user["id"], limit, offset),
+        )
     return [serializers.agent_run(r) for r in rows]

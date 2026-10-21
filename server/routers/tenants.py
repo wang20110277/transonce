@@ -45,6 +45,12 @@ def _ctx_for(tenant: dict, user: dict, role: dict | None, is_admin: bool) -> Ten
     )
 
 
+def _guard_admin_role(ctx: TenantContext, role: dict | None) -> None:
+    """`member.manage` must not be able to hand out the tenant-admin role."""
+    if role and role.get("name") == "租户管理员" and not ctx.is_tenant_admin:
+        raise HTTPException(403, "只有租户管理员可以分配租户管理员角色")
+
+
 def _ensure_agent_for(tenant: dict, user: dict, role: dict | None) -> dict:
     existing = db.fetch_one(
         "SELECT * FROM agents WHERE tenant_id=%s AND owner_user_id=%s", (tenant["id"], user["id"])
@@ -174,6 +180,9 @@ def create_tenant(body: dict = Body(...), user: dict = Depends(get_current_user)
 def tenant_detail(tenant_id: str, user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id)
     summary = _summary(ctx.tenant, user)
+    # Email addresses and other members' agent prompts are team-admin data.
+    can_team = ctx.has("team") or ctx.has("member.manage")
+    can_agent_admin = ctx.has("agent.manage")
 
     member_rows = db.fetch_all(
         """SELECT m.*, u.name, u.email, u.avatar, u.is_super_admin, r.name AS role_name, a.id AS agent_id
@@ -201,11 +210,19 @@ def tenant_detail(tenant_id: str, user: dict = Depends(get_current_user)):
         )
 
     summary.update({
-        "members": [serializers.member(m) for m in member_rows],
+        "members": [serializers.member(m, include_email=can_team) for m in member_rows],
         "roles": [serializers.role(r) for r in role_rows],
-        "agents": [serializers.agent(a) for a in agent_rows],
+        "agents": [
+            serializers.agent(
+                a,
+                include_prompt=can_agent_admin or a.get("owner_user_id") == user["id"],
+            )
+            for a in agent_rows
+        ],
         "joinRequests": [serializers.join_request(j) for j in join_rows],
-        "myAgent": serializers.agent(_ensure_agent_for(ctx.tenant, user, ctx.role)),
+        "myAgent": serializers.agent(
+            _ensure_agent_for(ctx.tenant, user, ctx.role), include_prompt=True
+        ),
     })
     return summary
 
@@ -214,7 +231,9 @@ def tenant_detail(tenant_id: str, user: dict = Depends(get_current_user)):
 
 @router.get("/tenants/{tenant_id}/roles")
 def list_roles(tenant_id: str, user: dict = Depends(get_current_user)):
-    load_tenant_context(user, tenant_id)
+    ctx = load_tenant_context(user, tenant_id)
+    if not (ctx.has("team") or ctx.has("role.manage")):
+        raise HTTPException(403, "缺少权限: team")
     rows = db.fetch_all("SELECT * FROM roles WHERE tenant_id=%s ORDER BY created_at", (tenant_id,))
     return [serializers.role(r) for r in rows]
 
@@ -277,7 +296,9 @@ def delete_role(tenant_id: str, role_id: str, user: dict = Depends(get_current_u
 
 @router.get("/tenants/{tenant_id}/members")
 def list_members(tenant_id: str, user: dict = Depends(get_current_user)):
-    load_tenant_context(user, tenant_id)
+    ctx = load_tenant_context(user, tenant_id)
+    if not (ctx.has("team") or ctx.has("member.manage")):
+        raise HTTPException(403, "缺少权限: team")
     rows = db.fetch_all(
         """SELECT m.*, u.name, u.email, u.avatar, u.is_super_admin, r.name AS role_name, a.id AS agent_id
            FROM tenant_members m
@@ -293,6 +314,8 @@ def list_members(tenant_id: str, user: dict = Depends(get_current_user)):
 @router.post("/tenants/{tenant_id}/members")
 def add_member(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "member.manage")
+    if body.get("isTenantAdmin") and not ctx.is_tenant_admin:
+        raise HTTPException(403, "只有租户管理员可以授予管理员身份")
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "请输入成员邮箱")
@@ -301,6 +324,7 @@ def add_member(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_
         role = db.fetch_one("SELECT * FROM roles WHERE id=%s AND tenant_id=%s", (body["roleId"], tenant_id))
     if not role:
         role = db.fetch_one("SELECT * FROM roles WHERE tenant_id=%s AND name=%s", (tenant_id, DEFAULT_ROLE))
+    _guard_admin_role(ctx, role)
     target = db.fetch_one("SELECT * FROM users WHERE lower(email)=lower(%s)", (email,))
     temp_password = None
     if not target:
@@ -342,7 +366,13 @@ def update_member(tenant_id: str, member_user_id: str, body: dict = Body(...), u
     )
     if not row:
         raise HTTPException(404, "成员不存在")
-    new_admin = body.get("isTenantAdmin", row["is_tenant_admin"])
+    # Only a tenant admin can touch another admin's role/flags, and only an
+    # admin can grant the admin flag (member.manage alone must not escalate).
+    if not ctx.is_tenant_admin and row.get("is_tenant_admin"):
+        raise HTTPException(403, "只有租户管理员可以修改管理员成员")
+    new_admin = bool(body.get("isTenantAdmin", row["is_tenant_admin"]))
+    if new_admin != bool(row.get("is_tenant_admin")) and not ctx.is_tenant_admin:
+        raise HTTPException(403, "只有租户管理员可以变更管理员身份")
     if row.get("is_tenant_admin") and not new_admin:
         admins = db.fetch_one(
             "SELECT count(*) AS c FROM tenant_members WHERE tenant_id=%s AND status='active' AND is_tenant_admin=TRUE",
@@ -351,13 +381,23 @@ def update_member(tenant_id: str, member_user_id: str, body: dict = Body(...), u
         if admins <= 1:
             raise HTTPException(400, "至少保留一名租户管理员")
     role_id = body.get("roleId", row.get("role_id"))
+    role = None
+    if role_id:
+        role = db.fetch_one(
+            "SELECT * FROM roles WHERE id=%s AND tenant_id=%s", (role_id, tenant_id)
+        )
+        if not role:
+            raise HTTPException(400, "角色不存在或不属于当前租户")
+        _guard_admin_role(ctx, role)
+    new_status = body.get("status", row["status"])
+    if new_status not in ("active", "invited", "disabled"):
+        raise HTTPException(400, "无效的成员状态")
     updated = db.execute_returning(
         """UPDATE tenant_members SET role_id=%s, is_tenant_admin=%s, status=%s
            WHERE id=%s RETURNING *""",
-        (role_id, new_admin, body.get("status", row["status"]), row["id"]),
+        (role_id, new_admin, new_status, row["id"]),
     )
     target = db.fetch_one("SELECT * FROM users WHERE id=%s", (member_user_id,))
-    role = db.fetch_one("SELECT * FROM roles WHERE id=%s", (role_id,))
     if updated["status"] == "active":
         _ensure_agent_for(ctx.tenant, target, role)
     log_activity(ctx, "member.updated", {"userId": member_user_id, "roleId": role_id})
@@ -446,6 +486,7 @@ def approve_join_request(tenant_id: str, request_id: str, body: dict = Body(defa
         role = db.fetch_one("SELECT * FROM roles WHERE id=%s AND tenant_id=%s", (body["roleId"], tenant_id))
     if not role:
         role = db.fetch_one("SELECT * FROM roles WHERE tenant_id=%s AND name=%s", (tenant_id, DEFAULT_ROLE))
+    _guard_admin_role(ctx, role)
     target = db.fetch_one("SELECT * FROM users WHERE id=%s", (req["user_id"],))
     existing = db.fetch_one(
         "SELECT * FROM tenant_members WHERE tenant_id=%s AND user_id=%s", (tenant_id, req["user_id"])
@@ -536,8 +577,8 @@ def update_agent(tenant_id: str, agent_id: str, body: dict = Body(...), user: di
 @router.post("/tenants/{tenant_id}/agents/reset")
 def reset_agent(tenant_id: str, user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id)
-    db.execute("DELETE FROM agents WHERE tenant_id=%s AND owner_user_id=%s", (tenant_id, user["id"]))
-    agent = orchestration.ensure_personal_agent(ctx)
+    agent = orchestration.reset_personal_agent(ctx)
+    log_activity(ctx, "agent.reset", {"agentId": str(agent["id"])})
     return serializers.agent(agent)
 
 
@@ -545,7 +586,7 @@ def reset_agent(tenant_id: str, user: dict = Depends(get_current_user)):
 
 @router.get("/tenants/{tenant_id}/activity")
 def list_activity(tenant_id: str, limit: int = 50, user: dict = Depends(get_current_user)):
-    load_tenant_context(user, tenant_id)
+    load_tenant_context(user, tenant_id, "dashboard")
     rows = db.fetch_all(
         "SELECT * FROM activity_events WHERE tenant_id=%s ORDER BY at DESC LIMIT %s",
         (tenant_id, min(limit, 200)),

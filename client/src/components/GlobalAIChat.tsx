@@ -95,7 +95,7 @@ export function GlobalAIChat() {
     setShowList(false);
   };
 
-  const send = async (text?: string, ctx?: Record<string, unknown>) => {
+  const send = async (text?: string, ctx?: Record<string, unknown>, confirm = false) => {
     const content = (text ?? input).trim();
     if (!content || !tid || loading) return;
     setInput("");
@@ -105,10 +105,10 @@ export function GlobalAIChat() {
     setMessages((m) => [...m, optimistic]);
     try {
       if (activeId) {
-        const res = await api.chat.send(tid, activeId, content, ctx);
+        const res = await api.chat.send(tid, activeId, content, ctx, confirm);
         setMessages((m) => [...m.filter((x) => x !== optimistic), res.userMessage, res.assistantMessage]);
       } else {
-        const res = await api.chat.quick(tid, content, ctx);
+        const res = await api.chat.quick(tid, content, ctx, undefined, confirm);
         setActiveId(res.conversation.id);
         setMessages([res.userMessage, res.assistantMessage]);
         await refreshConversations();
@@ -233,10 +233,39 @@ export function GlobalAIChat() {
                           <div className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground rounded-br-sm" : "bg-muted/60 rounded-bl-sm"}`}>
                             {m.content}
                           </div>
-                          {m.actionResult?.kind && (
+                          {m.actionResult?.kind && !["confirm", "cancelled"].includes(m.actionResult.kind) && (
                             <div className="flex items-center gap-1 text-[10px] text-emerald-600">
                               <CheckCircle2 className="w-3 h-3" /> 已执行：{actionLabel(m.actionResult.kind)}
                               {typeof m.actionResult.error === "string" && <span className="text-rose-600">· {m.actionResult.error}</span>}
+                            </div>
+                          )}
+                          {m.actionResult?.kind === "confirm" && !m.actionResult.error && !loading && i === messages.length - 1 && (
+                            <div className="rounded-xl border border-amber-300/70 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900/60 p-2.5 space-y-2">
+                              <p className="text-[11px] text-amber-900 dark:text-amber-200">
+                                {String(m.actionResult.summary ?? "该操作会修改平台状态，请确认。")}
+                              </p>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  onClick={() => send("确认执行", {
+                                    ...(context ?? {}),
+                                    intent: m.actionResult?.intent,
+                                    requirementId: m.actionResult?.requirementId,
+                                    environmentId: m.actionResult?.environmentId,
+                                  }, true)}
+                                >
+                                  确认执行
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs"
+                                  onClick={() => send("取消", context ?? undefined)}
+                                >
+                                  取消
+                                </Button>
+                              </div>
                             </div>
                           )}
                           {m.createdAt && <p className="text-[9px] text-muted-foreground px-1">{new Date(m.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</p>}

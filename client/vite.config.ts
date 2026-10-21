@@ -5,6 +5,25 @@ import {defineConfig} from 'vite';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      output: {
+        // Keep the vendor code cacheable and the app chunk under the warning
+        // limit as more views are added.
+        manualChunks: {
+          "react-vendor": ["react", "react-dom"],
+          "ui-vendor": [
+            "lucide-react",
+            "motion",
+            "class-variance-authority",
+            "clsx",
+            "tailwind-merge",
+          ],
+          "base-ui": ["@base-ui/react"],
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),

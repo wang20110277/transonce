@@ -5,10 +5,41 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import tempfile
 
 import mock_agent
-from config import AGENT_FALLBACK_MOCK, AGENT_PROVIDER, AGENT_TIMEOUT_MS
+from config import (
+    AGENT_CLI_DISALLOWED_TOOLS,
+    AGENT_FALLBACK_MOCK,
+    AGENT_MAX_PROMPT_CHARS,
+    AGENT_PROVIDER,
+    AGENT_TIMEOUT_MS,
+    AGENT_WORKDIR,
+)
+
+# Environment variables a coding CLI actually needs (auth lives in HOME/XDG).
+# Crucially this excludes DATABASE_URL / SECRET_KEY / ADMIN_PASSWORD.
+_AGENT_ENV_KEYS = {
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TERM", "USER",
+    "LOGNAME", "SHELL", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+}
+_agent_cwd: str | None = None
+
+
+def _child_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k in _AGENT_ENV_KEYS}
+
+
+def _agent_workdir() -> str:
+    global _agent_cwd
+    if _agent_cwd is None:
+        _agent_cwd = AGENT_WORKDIR or tempfile.mkdtemp(prefix="transonce-agent-")
+        os.makedirs(_agent_cwd, exist_ok=True)
+    return _agent_cwd
+
 
 JSON_ONLY = "只输出 JSON，不要任何解释、前后缀或 markdown 代码块。"
 
@@ -51,12 +82,41 @@ def run_agent_text(system_prompt: str, user_prompt: str, provider: str | None = 
     if p == "mock":
         return mock_agent.chat_reply(user_prompt)
     combined = f"{system_prompt}\n\n{JSON_ONLY}\n\n===\n\n{user_prompt}"
-    args = ["run", combined] if p == "opencode" else ["--print", combined, "--output-format", "text"]
+    if len(combined) > AGENT_MAX_PROMPT_CHARS:
+        combined = combined[:AGENT_MAX_PROMPT_CHARS] + "\n\n[内容过长，已截断]"
+    if p == "claude":
+        # Prompt goes over stdin: avoids argv limits and keeps notes out of `ps`.
+        args = ["--print", "--output-format", "text"]
+        if AGENT_CLI_DISALLOWED_TOOLS:
+            args += ["--disallowedTools", AGENT_CLI_DISALLOWED_TOOLS]
+        stdin_text: str | None = combined
+    else:
+        # `opencode run` takes the message as argv; length is capped above.
+        args = ["run", combined]
+        stdin_text = None
     timeout = AGENT_TIMEOUT_MS / 1000
-    proc = subprocess.run([p] + args, capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.Popen(
+        [p] + args,
+        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=_agent_workdir(),
+        env=_child_env(),
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(stdin_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            proc.kill()
+        proc.communicate()
+        raise RuntimeError(f"agent ({p}) timed out after {timeout:.0f}s")
     if proc.returncode != 0:
-        raise RuntimeError(f"agent ({p}) exited {proc.returncode}: {proc.stderr[:800]}")
-    return proc.stdout
+        raise RuntimeError(f"agent ({p}) exited {proc.returncode}: {(stderr or '')[:800]}")
+    return stdout
 
 
 def parse_agent_json(text: str):
