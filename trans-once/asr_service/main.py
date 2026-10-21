@@ -4,10 +4,10 @@ Runs separately from the main backend (which is Python 3.14 and has no torch).
 Loads the local SenseVoice model once at startup; exposes POST /asr.
 
 Run:
-  server/asr_service/.venv/bin/uvicorn main:app \\
-    --app-dir server/asr_service --port 8001
+  trans-once/asr_service/.venv/bin/uvicorn main:app \\
+    --app-dir trans-once/asr_service --port 8001
 Env:
-  MODEL_DIR (default server/models/SenseVoiceSmall), SENSEVOICE_LANGUAGE, FFMPEG_BIN
+  MODEL_DIR (default trans-once/models/SenseVoiceSmall), SENSEVOICE_LANGUAGE, FFMPEG_BIN
 """
 import logging
 import os

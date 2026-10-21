@@ -1,6 +1,6 @@
 """Postgres access for the transonce backend (psycopg2).
 
-Schema is managed by Alembic migrations under server/migrations/ — run
+Schema is managed by Alembic migrations under trans-once/migrations/ — run
 `alembic upgrade head`. This module only handles the connection pool + helpers.
 """
 import os

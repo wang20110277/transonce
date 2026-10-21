@@ -34,15 +34,15 @@
 ## 目录结构
 
 ```
-client/
-  components/ui/          # shadcn 基础组件（alias @ 指向 client/）
+trans-once-web-ui/
+  components/ui/          # shadcn 基础组件（alias @ 指向 trans-once-web-ui/）
   src/App.tsx             # 登录门禁、租户门禁、权限菜单、页面路由
   src/views/              # 工作台、项目、需求、制品、流水线、环境、监控、告警、我的 Agent
   src/components/         # 登录、租户选择、团队管理、会议、研发、测试、部署、Agent 对话
   src/lib/session.ts      # 认证 / 当前租户 / 权限判断
   src/lib/store.ts        # 租户工作区数据加载与刷新、askAgent 事件
   src/services/api.ts     # 全部后端 API
-server/
+trans-once/
   main.py                 # FastAPI 应用、启动时迁移检查 + 种子数据
   config.py               # 环境变量、权限目录、角色预设
   deps.py                 # 认证依赖、租户上下文、权限校验、审计日志
@@ -67,32 +67,31 @@ createdb transonce
 # 或：psql -c 'CREATE DATABASE transonce;'
 ```
 
-默认连接串为 `postgresql://postgres:postgres@localhost:5432/transonce`，如需修改写入 `server/.env`。
+默认连接串为 `postgresql://postgres:postgres@localhost:5432/transonce`，如需修改写入 `trans-once/.env`。
 
 ### 2. 后端
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r server/requirements.txt
+pip3 install -r trans-once/requirements.txt
 
-cp server/.env.example server/.env
+cp trans-once/.env.example trans-once/.env
 # 编辑 DATABASE_URL / AGENT_PROVIDER / SECRET_KEY
 
-cd server
-../.venv/bin/alembic upgrade head
+cd trans-once
+python3 -m alembic upgrade head
 cd ..
 
-./server/run.sh        # 固定监听 http://localhost:9005
+./trans-once/run.sh        # 固定监听 http://localhost:9005
 ```
 
-后端端口固定在 `9005`（`server/run.sh` 显式传入 `--port 9005`），前端代理也指向该端口。
+后端端口固定在 `9005`（`trans-once/run.sh` 显式传入 `--port 9005`），前端代理也指向该端口。
 
 启动时会自动执行 `seed.py`：创建超级管理员、演示租户「创新数智研发组」、角色、成员、项目、会议、需求、Agent、环境、制品、流水线、监控等数据。种子以租户 slug `innovatech` 幂等，重复启动不会重复插入。
 
 ### 3. 前端
 
 ```bash
-cd client
+cd trans-once-web-ui
 npm install
 npm run dev          # http://localhost:3002（固定端口，占用则启动失败）
 ```
@@ -126,7 +125,7 @@ Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直
 
 ## Agent 配置
 
-`server/.env`：
+`trans-once/.env`：
 
 ```env
 AGENT_PROVIDER=mock          # mock | auto | claude | opencode
@@ -146,15 +145,15 @@ AGENT_FALLBACK_MOCK=true
 
 ```bash
 # 后端（需服务已启动并完成种子）
-.venv/bin/python server/tests/smoke.py
+python3 trans-once/tests/smoke.py
 
 # 前端类型检查与生产构建
-cd client
+cd trans-once-web-ui
 npm run lint
 npm run build
 ```
 
-`server/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录，共 39 项检查，且不会创建或删除业务实体。
+`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录，共 39 项检查，且不会创建或删除业务实体。
 
 ## 主要 API
 

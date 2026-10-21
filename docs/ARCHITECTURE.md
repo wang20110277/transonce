@@ -10,7 +10,7 @@
 
 ```text
 ┌──────────────┐        HTTPS / JSON        ┌──────────────────────────┐
-│  React SPA   │  ───────────────────────▶  │  FastAPI (server/)       │
+│  React SPA   │  ───────────────────────▶  │  FastAPI (trans-once/)       │
 │ Vite :3002   │  ◀───────────────────────  │  :9005                   │
 └──────────────┘      /api (Vite proxy)     └────────────┬─────────────┘
                                                          │ psycopg2
@@ -67,7 +67,7 @@
 
 ## 3. RBAC 权限模型
 
-权限定义在 `server/config.py`，分为「菜单」与「敏感操作」：
+权限定义在 `trans-once/config.py`，分为「菜单」与「敏感操作」：
 
 ```text
 菜单: dashboard projects meetings requirements design development testing
@@ -271,22 +271,22 @@ extract / design / breakdown / code / test / pipeline / deploy / monitor / autop
 
 ```bash
 # 迁移
-cd server && ../.venv/bin/alembic upgrade head
+cd trans-once && python3 -m alembic upgrade head
 
 # 后端
-.venv/bin/uvicorn main:app --app-dir server --port 9005 --reload
+python3 -m uvicorn main:app --app-dir trans-once --port 9005 --reload
 
 # 前端
-cd client && npm run dev
+cd trans-once-web-ui && npm run dev
 
 # 冒烟测试（39 项）
-.venv/bin/python server/tests/smoke.py
+python3 trans-once/tests/smoke.py
 
 # 前端质量门禁
-cd client && npm run lint && npm run build
+cd trans-once-web-ui && npm run lint && npm run build
 ```
 
-数据库名固定为 **`transonce`**。`server/.env` 由 `dotenv` 加载；Alembic 的 `env.py` 同样加载 `.env`，并对连接串中的 `%` 做转义。
+数据库名固定为 **`transonce`**。`trans-once/.env` 由 `dotenv` 加载；Alembic 的 `env.py` 同样加载 `.env`，并对连接串中的 `%` 做转义。
 
 ---
 

@@ -2,8 +2,8 @@
 
 Usage (backend must be running on :9005 and seeded):
 
-    cd server && ../.venv/bin/python tests/smoke.py
-    API_BASE=http://localhost:9005 ../.venv/bin/python tests/smoke.py
+    cd trans-once && python3 tests/smoke.py
+    API_BASE=http://localhost:9005 python3 tests/smoke.py
 
 The suite is intentionally non-destructive: it only reads data, reveals a
 masked secret (which writes an audit log), runs a monitor health check, and

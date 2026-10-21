@@ -10,12 +10,12 @@ __pycache__/
 
 # Node / frontend build
 node_modules/
-client/dist/
-client/.env
+trans-once-web-ui/dist/
+trans-once-web-ui/.env
 npm-debug.log*
 
 # Local environment and secrets
-server/.env
+trans-once/.env
 .env.local
 .env.*.local
 

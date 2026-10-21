@@ -1,7 +1,7 @@
 """TransOnce backend — multi-tenant, agent-orchestrated SDLC platform.
 
-Run:  .venv/bin/uvicorn main:app --app-dir server --port 9005 --reload
-Schema: alembic upgrade head (server/migrations).
+Run:  python3 -m uvicorn main:app --app-dir trans-once --port 9005 --reload
+Schema: alembic upgrade head (trans-once/migrations).
 """
 import logging
 from contextlib import asynccontextmanager

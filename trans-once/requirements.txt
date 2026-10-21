@@ -1,5 +1,5 @@
 # transonce backend dependencies
-# install: python3 -m venv .venv && .venv/bin/pip install -r server/requirements.txt
+# install: pip3 install -r trans-once/requirements.txt
 fastapi==0.136.3
 uvicorn==0.49.0
 python-dotenv==1.2.2
