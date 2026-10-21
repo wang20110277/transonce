@@ -1,266 +1,186 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  Rocket,
-  Sparkles,
-  Loader2,
-  CheckCircle2,
-  FileText,
-  GitBranch,
-  Server,
-  Terminal,
+  Rocket, Plus, Loader2, CheckCircle2, XCircle, ExternalLink, ShieldAlert,
+  Server, RefreshCw, Bot, Clock,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { generateDeploymentPlan, type DeploymentPlanDraft } from "../agents";
-import { useAppStore, addDeployment } from "../lib/store";
+import { Button } from "@/components/ui/button";
+import { PageHeader, EmptyState, StatCard, StatusPill, Pill, Select, Textarea, formatDate, timeAgo } from "../components/common";
+import { Modal } from "../components/TeamSelect";
+import { api } from "../services/api";
+import { can, useSession } from "../lib/session";
+import { askAgent, refreshWorkspace, useWorkspace } from "../lib/store";
 
 export function DeploymentCenter() {
-  const requirements = useAppStore((s) => s.requirements);
-  const testRuns = useAppStore((s) => s.testRuns);
-  const deployments = useAppStore((s) => s.deployments);
-
-  const [activeReqId, setActiveReqId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const tenant = useSession((s) => s.currentTenant)!;
+  const deployments = useWorkspace((s) => s.deployments);
+  const artifacts = useWorkspace((s) => s.artifacts);
+  const environments = useWorkspace((s) => s.environments);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<DeploymentPlanDraft | null>(null);
+  const [filter, setFilter] = useState("all");
+  const tid = tenant.tenant.id;
 
-  const activeReq = requirements.find((r) => r.id === activeReqId);
-  const lastTest = activeReqId
-    ? testRuns.find((r) => r.requirementId === activeReqId)
-    : undefined;
+  const filtered = useMemo(() => deployments.filter((d) => {
+    if (filter === "all") return true;
+    if (filter === "production") return d.environment.toLowerCase().includes("生产") || environments.find((e) => e.id === d.environmentId)?.kind === "production";
+    return d.status === filter;
+  }), [deployments, filter, environments]);
 
-  async function handlePlan(reqId: string) {
-    const req = requirements.find((r) => r.id === reqId);
-    if (!req) return;
-    setActiveReqId(reqId);
-    setPlan(null);
-    setError(null);
-    setLoading(true);
-    try {
-      const result = await generateDeploymentPlan(req.title, req.description ?? "");
-      setPlan(result);
-      if (!result) setError("Agent 未能生成部署方案，请稍后重试。");
-    } catch (e) {
-      console.error(e);
-      setError("生成失败，请检查网络与 GEMINI_API_KEY 配置后重试。");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function deploy(environment: "test" | "production") {
-    if (!activeReqId) return;
-    await addDeployment({
-      artifactId: activeReqId,
-      environment,
-      status: "success",
-      url: `https://${environment === "test" ? "test" : "prod"}-${activeReqId}.transones.ai`,
-    });
-  }
+  const stats = useMemo(() => ({
+    success: deployments.filter((d) => d.status === "success").length,
+    failed: deployments.filter((d) => d.status === "failed").length,
+    prod: deployments.filter((d) => environments.find((e) => e.id === d.environmentId)?.kind === "production").length,
+  }), [deployments, environments]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Rocket className="w-6 h-6 text-primary" />
-            部署管理
-          </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            由 <span className="font-medium">部署专家</span> Agent 生成 CI/CD 流水线方案，人工确认后部署到目标环境。
-          </p>
-        </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="部署管理"
+        description="测试环境可自助发布；生产环境发布需要单独授权，并且会记录操作人、制品版本与发布说明。"
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => refreshWorkspace()}><RefreshCw className="w-4 h-4 mr-2" /> 刷新</Button>
+            <Button size="sm" onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-2" /> 新建部署</Button>
+          </>
+        }
+      />
+
+      {error && <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-4 py-2">{error}</div>}
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard icon={Rocket} label="部署总数" value={deployments.length} tone="blue" />
+        <StatCard icon={CheckCircle2} label="成功" value={stats.success} tone="emerald" />
+        <StatCard icon={XCircle} label="失败" value={stats.failed} tone={stats.failed ? "rose" : "default"} />
+        <StatCard icon={Server} label="生产发布" value={stats.prod} tone="violet" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Requirements */}
-        <Card className="lg:col-span-2 p-5">
-          <h3 className="font-semibold mb-3 flex items-center gap-2">
-            <FileText className="w-4 h-4 text-primary" />
-            可部署需求
-            <Badge variant="secondary">{requirements.length}</Badge>
-          </h3>
-          <Separator className="mb-3" />
-          <ScrollArea className="max-h-[460px] pr-3">
-            {requirements.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                暂无需求。请先在「会议纪要」中提取并采纳需求。
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {requirements.map((r) => {
-                  const run = testRuns.find((t) => t.requirementId === r.id);
-                  return (
-                    <div
-                      key={r.id}
-                      className="rounded-lg border p-3 hover:border-primary/40 transition-colors"
-                    >
-                      <p className="font-medium text-sm truncate">{r.title}</p>
-                      <div className="flex items-center justify-between mt-2">
-                        {run ? (
-                          <Badge
-                            variant={run.status === "passed" ? "default" : "destructive"}
-                            className="text-[10px]"
-                          >
-                            测试 {run.passed}/{run.total}
-                          </Badge>
-                        ) : (
-                          <span className="text-[11px] text-muted-foreground">未测试</span>
-                        )}
-                        <Button
-                          size="sm"
-                          variant={plan && activeReqId === r.id ? "outline" : "default"}
-                          className="h-7 text-xs"
-                          disabled={loading && activeReqId === r.id}
-                          onClick={() => handlePlan(r.id)}
-                        >
-                          {loading && activeReqId === r.id ? (
-                            <>
-                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                              生成中…
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="w-3 h-3 mr-1" />
-                              生成方案
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </ScrollArea>
-        </Card>
-
-        {/* Plan review */}
-        <Card className="lg:col-span-3 p-5 flex flex-col">
-          <h3 className="font-semibold flex items-center gap-2 mb-2">
-            <GitBranch className="w-4 h-4 text-primary" />
-            {activeReq ? `部署方案：${activeReq.title}` : "部署方案"}
-          </h3>
-          <Separator className="mb-3" />
-          {error && <p className="text-sm text-destructive mb-3">{error}</p>}
-
-          {!activeReq ? (
-            <div className="h-[420px] flex flex-col items-center justify-center text-center text-muted-foreground">
-              <Rocket className="w-10 h-10 mb-3 opacity-40" />
-              <p className="text-sm">选择左侧需求，由 Agent 生成 CI/CD 流水线与部署方案。</p>
-            </div>
-          ) : !plan ? (
-            <div className="h-[420px] flex flex-col items-center justify-center text-center text-muted-foreground">
-              <Loader2 className="w-8 h-8 mb-3 animate-spin opacity-60" />
-              <p className="text-sm">{loading ? "部署专家正在设计方案…" : "等待生成"}</p>
-            </div>
-          ) : (
-            <ScrollArea className="flex-1 max-h-[420px] pr-3">
-              <div className="space-y-4">
-                {lastTest && lastTest.status !== "passed" && (
-                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-                    ⚠ 该需求测试未全部通过（{lastTest.passed}/{lastTest.total}），建议先修复再部署到生产环境。
-                  </div>
-                )}
-
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    流水线阶段
-                  </p>
-                  <div className="space-y-2">
-                    {plan.stages.map((stage, i) => (
-                      <div key={i} className="flex items-center gap-3 rounded-lg border p-2.5">
-                        <div className="bg-primary/10 text-primary w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">
-                          {i + 1}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium">{stage.name}</p>
-                          {stage.command && (
-                            <p className="text-[11px] font-mono text-muted-foreground truncate flex items-center gap-1">
-                              <Terminal className="w-3 h-3" />
-                              {stage.command}
-                            </p>
-                          )}
-                        </div>
-                        <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    目标环境
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {plan.environments.map((env, i) => (
-                      <Badge key={i} variant="outline" className="gap-1">
-                        <Server className="w-3 h-3" />
-                        {env}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-
-                {plan.notes && (
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                      注意事项
-                    </p>
-                    <p className="text-sm text-muted-foreground rounded-lg bg-muted/40 p-3">
-                      {plan.notes}
-                    </p>
-                  </div>
-                )}
-
-                <div className="flex gap-2 pt-2">
-                  <Button className="flex-1" variant="secondary" onClick={() => deploy("test")}>
-                    <Rocket className="w-4 h-4 mr-2" />
-                    部署到测试环境
-                  </Button>
-                  <Button className="flex-1" onClick={() => deploy("production")}>
-                    <Rocket className="w-4 h-4 mr-2" />
-                    部署到生产环境
-                  </Button>
-                </div>
-              </div>
-            </ScrollArea>
-          )}
-        </Card>
+      <div className="flex items-center gap-2">
+        <Select value={filter} onChange={setFilter}>
+          <option value="all">全部部署</option>
+          <option value="success">成功</option>
+          <option value="failed">失败</option>
+          <option value="pending">待执行</option>
+          <option value="production">生产环境</option>
+        </Select>
       </div>
 
-      {/* Deployment history */}
-      {deployments.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-            部署记录（{deployments.length}）
-          </h3>
-          <div className="space-y-2">
-            {deployments.map((d) => {
-              const req = requirements.find((r) => r.id === d.artifactId);
-              return (
-                <Card key={d.id} className="p-4 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="bg-primary/10 p-2 rounded-full shrink-0">
-                      <Rocket className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {req?.title ?? "需求"} · {d.environment === "test" ? "测试环境" : "生产环境"}
-                      </p>
-                      <p className="text-xs text-muted-foreground truncate font-mono">{d.url}</p>
-                    </div>
-                  </div>
-                  <Badge className="bg-green-500 hover:bg-green-600 shrink-0">成功</Badge>
-                </Card>
-              );
-            })}
-          </div>
+      {!filtered.length ? (
+        <EmptyState icon={Rocket} title="暂无部署记录" description="选择制品与环境发起部署，或通过需求的「一键研发闭环」自动部署到测试环境。" action={
+          <Button size="sm" className="mt-2" onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-2" /> 新建部署</Button>
+        } />
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((d) => {
+            const env = environments.find((e) => e.id === d.environmentId);
+            return (
+              <Card key={d.id} className="p-4 flex flex-wrap items-center gap-3">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${d.status === "success" ? "bg-emerald-500/10 text-emerald-600" : d.status === "failed" ? "bg-rose-500/10 text-rose-600" : "bg-blue-500/10 text-blue-600"}`}>
+                  {d.status === "success" ? <CheckCircle2 className="w-4 h-4" /> : d.status === "failed" ? <XCircle className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                </div>
+                <div className="flex-1 min-w-[200px]">
+                  <p className="text-sm font-medium flex flex-wrap items-center gap-2">
+                    {d.artifactName ?? "未知制品"}
+                    <Badgeish text={d.environment} tone={env?.kind === "production" ? "rose" : "gray"} />
+                  </p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {d.notes || "无发布说明"} · {formatDate(d.deployedAt)} · {timeAgo(d.deployedAt)}
+                  </p>
+                </div>
+                {d.url && (
+                  <a href={d.url} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">
+                    <ExternalLink className="w-3.5 h-3.5" /> 访问
+                  </a>
+                )}
+                <StatusPill status={d.status} />
+              </Card>
+            );
+          })}
         </div>
       )}
+
+      <div className="flex justify-end">
+        <Button variant="ghost" size="sm" onClick={() => askAgent("检查当前部署状态与环境一致性，给出回滚和风险建议")}>
+          <Bot className="w-4 h-4 mr-2" /> 让 Agent 检查部署
+        </Button>
+      </div>
+
+      {open && (
+        <DeployModal
+          artifacts={artifacts}
+          environments={environments}
+          busy={busy}
+          onClose={() => setOpen(false)}
+          onDeploy={async (artifactId, environmentId, notes) => {
+            setBusy(true);
+            setError(null);
+            try {
+              await api.deployments.create(tid, { artifactId, environmentId, notes });
+              setOpen(false);
+              await refreshWorkspace();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function Badgeish({ text, tone }: { text: string; tone: "gray" | "rose" }) {
+  return <Pill tone={tone}>{text}</Pill>;
+}
+
+function DeployModal({ artifacts, environments, busy, onClose, onDeploy }: {
+  artifacts: { id: string; name: string; version: string }[];
+  environments: { id: string; name: string; kind: string; baseUrl?: string | null }[];
+  busy: boolean;
+  onClose: () => void;
+  onDeploy: (artifactId: string, environmentId: string, notes: string) => Promise<void>;
+}) {
+  const allowed = environments.filter((e) => e.kind !== "production" || can("deploy.production"));
+  const [artifactId, setArtifactId] = useState(artifacts[0]?.id ?? "");
+  const [envId, setEnvId] = useState(allowed.find((e) => e.kind === "test")?.id ?? allowed[0]?.id ?? "");
+  const [notes, setNotes] = useState("");
+  const prodBlocked = environments.some((e) => e.kind === "production") && !can("deploy.production");
+
+  return (
+    <Modal title="新建部署" onClose={onClose}>
+      <div className="space-y-3">
+        {prodBlocked && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 flex gap-2">
+            <ShieldAlert className="w-4 h-4 shrink-0" />
+            生产环境部署需要单独授权，当前角色只能发布到非生产环境。
+          </div>
+        )}
+        <div>
+          <label className="text-sm font-medium">制品</label>
+          <Select value={artifactId} onChange={setArtifactId} className="mt-1.5 w-full">
+            <option value="">选择制品…</option>
+            {artifacts.map((a) => <option key={a.id} value={a.id}>{a.name} {a.version}</option>)}
+          </Select>
+        </div>
+        <div>
+          <label className="text-sm font-medium">目标环境</label>
+          <Select value={envId} onChange={setEnvId} className="mt-1.5 w-full">
+            {allowed.map((e) => <option key={e.id} value={e.id}>{e.name}（{e.kind}）</option>)}
+          </Select>
+        </div>
+        <div>
+          <label className="text-sm font-medium">发布说明</label>
+          <Textarea value={notes} onChange={setNotes} rows={3} placeholder="本次变更内容、验证方式与回滚方案" />
+        </div>
+        <div className="flex justify-end gap-2 border-t pt-3">
+          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button disabled={busy || !artifactId || !envId} onClick={() => onDeploy(artifactId, envId, notes)}>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Rocket className="w-4 h-4 mr-2" /> 部署</>}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

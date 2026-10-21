@@ -1,175 +1,231 @@
-import React, { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { 
-  Building2, 
-  Plus, 
-  ChevronRight, 
-  Users, 
-  Globe, 
-  Settings2,
-  Shield,
-  ArrowLeft,
-  CheckCircle2
-} from 'lucide-react';
-import { motion } from 'motion/react';
-import { Tenant } from '../types';
+import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import {
+  Building2, Plus, ChevronRight, Users, Shield, Search, CheckCircle2,
+  Clock, LogOut, Loader2, ArrowLeft, Globe,
+} from "lucide-react";
+import { motion } from "motion/react";
+import { api } from "../services/api";
+import { logout, reloadMemberships, selectTenant, useSession } from "../lib/session";
 
-interface TeamSelectProps {
-  tenants: Tenant[];
-  onSelect: (tenant: Tenant) => void;
-  onLogout: () => void;
-}
+type DiscoverItem = {
+  tenant: { id: string; name: string; slug: string; description?: string | null; logo?: string | null };
+  memberCount: number;
+  myRequestStatus: string | null;
+};
 
-export function TeamSelect({ tenants, onSelect, onLogout }: TeamSelectProps) {
-  const [isApplying, setIsApplying] = useState(false);
-  const [selectedToJoin, setSelectedToJoin] = useState<string | null>(null);
-  const [hasApplied, setHasApplied] = useState(false);
+export function TeamSelect() {
+  const user = useSession((s) => s.user);
+  const memberships = useSession((s) => s.memberships);
+  const [tab, setTab] = useState<"mine" | "discover">("mine");
+  const [items, setItems] = useState<DiscoverItem[]>([]);
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<DiscoverItem | null>(null);
+  const [message, setMessage] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [form, setForm] = useState({ name: "", description: "" });
+  const [toast, setToast] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const availableTeams = [
-    { id: 't3', name: '未来科技实验室', description: '专注前沿技术探索与 AI 落地' },
-    { id: 't4', name: '卓越运营部', description: '企业效率中台与数字化转型' },
-  ];
+  const loadDiscover = async (query = "") => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.tenants.discover(query);
+      setItems(res.items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  if (isApplying) {
-    return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6 flex items-center justify-center">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-[500px]"
-        >
-          <Card className="p-8 shadow-2xl border-none">
-            <Button variant="ghost" size="sm" onClick={() => setIsApplying(false)} className="mb-6 -ml-2">
-              <ArrowLeft className="w-4 h-4 mr-2" /> 返回
-            </Button>
-            
-            <h2 className="text-2xl font-bold mb-2">寻找您的团队</h2>
-            <p className="text-sm text-muted-foreground mb-8">选择您想要加入的工作空间并发送申请</p>
+  useEffect(() => {
+    if (tab === "discover") loadDiscover(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
-            {hasApplied ? (
-              <div className="text-center py-10 space-y-4">
-                <div className="w-16 h-16 bg-green-500/10 text-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <CheckCircle2 className="w-8 h-8" />
-                </div>
-                <h3 className="text-lg font-bold">申请已发送</h3>
-                <p className="text-sm text-muted-foreground">您的加入申请已提交至团队管理员，请耐心等待审核通知。</p>
-                <Button className="mt-6" onClick={() => setIsApplying(false)}>回到团队列表</Button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {availableTeams.map(team => (
-                  <div 
-                    key={team.id}
-                    className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
-                      selectedToJoin === team.id ? 'border-primary bg-primary/5' : 'border-zinc-100 hover:border-zinc-200'
-                    }`}
-                    onClick={() => setSelectedToJoin(team.id)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-zinc-100 rounded-lg flex items-center justify-center text-zinc-500 font-bold uppercase">
-                          {team.name.substring(0, 2)}
-                        </div>
-                        <div>
-                          <p className="font-bold text-sm">{team.name}</p>
-                          <p className="text-xs text-muted-foreground">{team.description}</p>
-                        </div>
-                      </div>
-                      {selectedToJoin === team.id && <CheckCircle2 className="w-5 h-5 text-primary" />}
-                    </div>
-                  </div>
-                ))}
-                
-                <Button 
-                  className="w-full h-11 mt-6" 
-                  disabled={!selectedToJoin}
-                  onClick={() => setHasApplied(true)}
-                >
-                  发送加入申请
-                </Button>
-              </div>
-            )}
-          </Card>
-        </motion.div>
-      </div>
-    );
-  }
+  const apply = async () => {
+    if (!selected) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await api.tenants.requestJoin(selected.tenant.id, { message });
+      setSelected(null);
+      setMessage("");
+      setToast("加入申请已发送，等待租户管理员审批");
+      await loadDiscover(q);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const create = async () => {
+    if (!form.name.trim()) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await api.tenants.create({ name: form.name, description: form.description });
+      await reloadMemberships();
+      selectTenant(created);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6 flex items-center justify-center">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-[640px]"
-      >
-        <div className="flex justify-between items-center mb-8 px-2">
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6 flex items-start justify-center pt-16">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-[860px]">
+        <div className="flex flex-wrap justify-between items-start gap-4 mb-6 px-1">
           <div>
             <h2 className="text-2xl font-bold tracking-tight">选择或加入团队</h2>
-            <p className="text-sm text-muted-foreground mt-1">请选择要进入的工作空间，或申请加入新团队</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {user?.name}，你好。你已加入 {memberships.length} 个租户{user?.isSuperAdmin ? "（超级管理员可见全部租户）" : ""}
+            </p>
           </div>
-          <Button variant="ghost" size="sm" onClick={onLogout} className="text-muted-foreground">
-            退出登录
+          <Button variant="ghost" size="sm" onClick={logout} className="text-muted-foreground">
+            <LogOut className="w-4 h-4 mr-2" /> 退出登录
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 gap-4">
-          {tenants.map((tenant) => (
-            <Card 
-              key={tenant.id} 
-              className="group p-6 cursor-pointer hover:shadow-xl hover:shadow-primary/5 transition-all bg-card border-zinc-200 dark:border-zinc-800"
-              onClick={() => onSelect(tenant)}
-            >
-              <div className="flex items-center gap-5">
-                <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
-                  {tenant.logo ? (
-                    <img src={tenant.logo} alt={tenant.name} className="w-8 h-8 object-contain" />
-                  ) : (
-                    <Building2 className="w-7 h-7" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-lg font-bold">{tenant.name}</h3>
-                    <Badge variant="secondary" className="text-[10px] bg-primary/5 text-primary border-none">
-                      已加入
-                    </Badge>
+        <div className="flex gap-1 p-1 bg-muted rounded-lg mb-6 w-fit">
+          <button onClick={() => setTab("mine")} className={`px-4 py-1.5 text-sm rounded-md ${tab === "mine" ? "bg-background shadow-sm font-medium" : "text-muted-foreground"}`}>我的团队</button>
+          <button onClick={() => setTab("discover")} className={`px-4 py-1.5 text-sm rounded-md ${tab === "discover" ? "bg-background shadow-sm font-medium" : "text-muted-foreground"}`}>发现团队</button>
+        </div>
+
+        {toast && (
+          <div className="mb-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4" /> {toast}
+          </div>
+        )}
+        {error && <div className="mb-4 text-sm text-destructive bg-destructive/10 rounded-lg px-4 py-2">{error}</div>}
+
+        {tab === "mine" ? (
+          <div className="grid grid-cols-1 gap-4">
+            {memberships.map((m) => (
+              <Card key={m.tenant.id} className="group p-5 cursor-pointer hover:shadow-xl hover:shadow-primary/5 transition-all" onClick={() => selectTenant(m)}>
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                    <Building2 className="w-6 h-6" />
                   </div>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Shield className="w-3.5 h-3.5" />
-                      {tenant.roles.length} 个岗位
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Users className="w-3.5 h-3.5" />
-                      {tenant.members.length} 名成员
-                    </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-lg font-bold truncate">{m.tenant.name}</h3>
+                      <Badge variant="secondary" className="text-[10px] bg-primary/5 text-primary border-none">已加入</Badge>
+                      {m.isTenantAdmin && <Badge variant="outline" className="text-[10px]">管理员</Badge>}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
+                      <span className="flex items-center gap-1"><Shield className="w-3.5 h-3.5" />{m.role?.name ?? "未分配角色"}</span>
+                      <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{m.memberCount ?? 0} 名成员</span>
+                    </div>
                   </div>
+                  <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
                 </div>
-                <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
+              </Card>
+            ))}
+            <Card className="border-dashed border-2 p-5 flex flex-col items-center justify-center gap-2 bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => setCreateOpen(true)}>
+              <div className="bg-background p-2.5 rounded-full shadow-sm"><Plus className="w-5 h-5 text-primary" /></div>
+              <div className="text-center">
+                <h3 className="font-semibold">创建新租户</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">你将自动成为租户管理员</p>
               </div>
             </Card>
-          ))}
-
-          <Card 
-            className="border-dashed border-2 p-6 flex flex-col items-center justify-center gap-3 bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer group"
-            onClick={() => setIsApplying(true)}
-          >
-            <div className="bg-background p-3 rounded-full shadow-sm group-hover:scale-110 transition-transform">
-              <Plus className="w-6 h-6 text-primary" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadDiscover(q)} placeholder="搜索租户名称或描述…" className="pl-9" />
+              </div>
+              <Button variant="outline" onClick={() => loadDiscover(q)} disabled={loading}>
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "搜索"}
+              </Button>
             </div>
-            <div className="text-center">
-              <h3 className="font-bold">申请加入新工作空间</h3>
-              <p className="text-xs text-muted-foreground mt-1">输入团队代码或联系管理员</p>
-            </div>
-          </Card>
-        </div>
 
-        <div className="mt-12 text-center text-xs text-muted-foreground flex items-center justify-center gap-4">
-          <span className="flex items-center gap-1"><Globe className="w-3 h-3" /> 简体中文</span>
-          <span className="flex items-center gap-1 hover:text-primary cursor-pointer underline underline-offset-4">查看帮助中心</span>
+            {items.map((item) => (
+              <Card key={item.tenant.id} className="p-5">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="w-11 h-11 bg-muted rounded-xl flex items-center justify-center"><Building2 className="w-5 h-5 text-muted-foreground" /></div>
+                  <div className="flex-1 min-w-[200px]">
+                    <h3 className="font-bold">{item.tenant.name}</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">{item.tenant.description || "暂无描述"} · {item.memberCount} 名成员</p>
+                  </div>
+                  {item.myRequestStatus === "pending" ? (
+                    <Badge variant="outline" className="text-amber-600 border-amber-300"><Clock className="w-3 h-3 mr-1" />待审批</Badge>
+                  ) : item.myRequestStatus === "rejected" ? (
+                    <Badge variant="outline" className="text-muted-foreground">上次申请被拒绝</Badge>
+                  ) : (
+                    <Button size="sm" onClick={() => { setSelected(item); setMessage(""); }}>申请加入</Button>
+                  )}
+                </div>
+              </Card>
+            ))}
+            {!loading && items.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground py-10">没有找到可加入的租户</p>
+            )}
+          </div>
+        )}
+
+        <div className="mt-10 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+          <Globe className="w-3 h-3" /> 租户之间数据完全隔离，权限由各租户独立管理
         </div>
+      </motion.div>
+
+      {selected && (
+        <Modal title={`申请加入「${selected.tenant.name}」`} onClose={() => setSelected(null)}>
+          <p className="text-sm text-muted-foreground mb-4">申请将提交给该租户管理员。管理员会为你分配角色，并自动创建你的专属 Agent。</p>
+          <label className="text-sm font-medium">申请说明（可选）</label>
+          <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring" placeholder="例如：我是前端工程师，希望加入产品研发组" />
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setSelected(null)}>取消</Button>
+            <Button onClick={apply} disabled={loading}>{loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "发送申请"}</Button>
+          </div>
+        </Modal>
+      )}
+
+      {createOpen && (
+        <Modal title="创建租户" onClose={() => setCreateOpen(false)}>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium">租户名称</label>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：智能交付中心" className="mt-1.5" />
+            </div>
+            <div>
+              <label className="text-sm font-medium">描述</label>
+              <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring" />
+            </div>
+            <p className="text-xs text-muted-foreground">创建后将内置 6 个角色模板（管理员/产品/研发/测试/DevOps/只读），你将成为租户管理员。</p>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" onClick={() => setCreateOpen(false)}>取消</Button>
+              <Button onClick={create} disabled={creating || !form.name.trim()}>{creating ? <Loader2 className="w-4 h-4 animate-spin" /> : "创建并进入"}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className={`bg-card border rounded-xl shadow-2xl w-full ${wide ? "max-w-3xl" : "max-w-md"} max-h-[88vh] overflow-auto`} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <h3 className="font-semibold">{title}</h3>
+          <Button variant="ghost" size="sm" onClick={onClose}><ArrowLeft className="w-4 h-4" /></Button>
+        </div>
+        <div className="p-5">{children}</div>
       </motion.div>
     </div>
   );

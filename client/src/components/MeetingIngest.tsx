@@ -1,391 +1,274 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import {
-  Mic,
-  Sparkles,
-  Loader2,
-  CheckCircle2,
-  Trash2,
-  FileText,
-  Wand2,
-  Square,
+  CalendarClock, Plus, Sparkles, Trash2, Loader2, FileText, Users,
+  Wand2, CheckSquare2, Square, Bot, ClipboardList,
 } from "lucide-react";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  extractRequirementsFromMeeting,
-  type ExtractedRequirement,
-} from "../agents";
-import { addMeeting, addRequirements } from "../lib/store";
+import { PageHeader, EmptyState, Textarea, Pill, formatDate, statusLabel } from "../components/common";
+import { Modal } from "../components/TeamSelect";
+import { api } from "../services/api";
+import { useSession } from "../lib/session";
+import { askAgent, refreshWorkspace, useWorkspace } from "../lib/store";
+import type { Requirement } from "../types";
 
-interface DraftRequirement extends ExtractedRequirement {
-  _id: string;
-}
+type Draft = Partial<Requirement> & { title: string; description?: string; acceptanceCriteria?: string[] };
 
-const SAMPLE_NOTES = `时间：2026-06-12 上午 10:00
-参会人：产品负责人张伟、前端工程师李娜、后端工程师王强、测试工程师赵敏
-
-1. 张伟：本期核心目标是上线"会议纪要驱动研发"的 MVP，先做 Web 端。用户可以把会议纪要粘贴进来，系统自动提取需求。
-2. 李娜：前端用现有的 React + shadcn 框架，需要一个会议录入页面和需求评审页面。要求支持手动编辑 AI 提取出来的需求再保存。
-3. 王强：后端要持久化会议和需求，并记录每个需求是从哪次会议来的。后续要支持把需求分配给 Agent 自动拆解任务。
-4. 赵敏：测试方面，至少要覆盖需求提取的边界情况，比如空纪要、纯闲聊纪要。每个需求必须有可验证的验收标准。
-5. 决议：下周三前完成会议→需求的闭环，优先级最高；任务拆解和研发执行排第二期。`;
-
-function priorityVariant(priority: DraftRequirement["priority"]) {
-  switch (priority) {
-    case "high":
-      return "destructive";
-    case "medium":
-      return "default";
-    default:
-      return "secondary";
-  }
-}
-
-const priorityLabel: Record<DraftRequirement["priority"], string> = {
-  high: "高",
-  medium: "中",
-  low: "低",
-};
-
-export function MeetingIngest({ onAdopted }: { onAdopted?: () => void }) {
-  const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState("");
-  const [participants, setParticipants] = useState("");
-  const [extracting, setExtracting] = useState(false);
+export function MeetingIngest() {
+  const tenant = useSession((s) => s.currentTenant)!;
+  const meetings = useWorkspace((s) => s.meetings);
+  const projects = useWorkspace((s) => s.projects);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<DraftRequirement[]>([]);
-  const [adoptedCount, setAdoptedCount] = useState<number | null>(null);
-  const [sourceMeetingId, setSourceMeetingId] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [interim, setInterim] = useState("");
-  const recognitionRef = useRef<any>(null);
+  const [drafts, setDrafts] = useState<Draft[] | null>(null);
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [createdCount, setCreatedCount] = useState<number | null>(null);
+  const tid = tenant.tenant.id;
 
-  useEffect(
-    () => () => {
-      try {
-        recognitionRef.current?.stop();
-      } catch {
-        /* noop */
-      }
-    },
-    [],
-  );
+  const selected = meetings.find((m) => m.id === selectedId) ?? meetings[0] ?? null;
 
-  // Live ASR via the browser Web Speech API (Chrome). Transcript fills the
-  // notes box and flows into the same meeting → requirement pipeline.
-  function startRecording() {
-    const SR =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) {
-      setError("当前浏览器不支持语音识别，请使用 Chrome。");
-      return;
-    }
-    const rec = new SR();
-    rec.lang = "zh-CN";
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.onresult = (e: any) => {
-      let finalText = "";
-      let interimText = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += t;
-        else interimText += t;
-      }
-      if (finalText) setNotes((n) => (n ? n + "\n" : "") + finalText);
-      setInterim(interimText);
-    };
-    rec.onerror = (e: any) => {
-      setError("语音识别出错：" + (e.error || "未知"));
-      setIsRecording(false);
-    };
-    rec.onend = () => {
-      setIsRecording(false);
-      setInterim("");
-    };
-    rec.start();
-    recognitionRef.current = rec;
-    setIsRecording(true);
+  const extract = async () => {
+    if (!selected) return;
+    setBusy(true);
     setError(null);
-  }
-
-  function stopRecording() {
+    setDrafts(null);
+    setCreatedCount(null);
     try {
-      recognitionRef.current?.stop();
-    } catch {
-      /* noop */
-    }
-    setIsRecording(false);
-  }
-
-  const canExtract = title.trim().length > 0 && notes.trim().length > 0 && !extracting;
-
-  async function handleExtract() {
-    setError(null);
-    setAdoptedCount(null);
-    setExtracting(true);
-    try {
-      const meeting = await addMeeting({
-        title: title.trim(),
-        rawNotes: notes.trim(),
-        participants: participants
-          .split(/[，,、\s]+/)
-          .map((n) => n.trim())
-          .filter(Boolean)
-          .map((name) => ({ name })),
-        source: "manual",
-      });
-      setSourceMeetingId(meeting.id);
-      const extracted = await extractRequirementsFromMeeting(title.trim(), notes.trim());
-      setDrafts(
-        extracted.map((r, i) => ({
-          ...r,
-          // keep a stable local key; reference the source meeting on adopt
-          _id: `${meeting.id}_${i}`,
-        })),
-      );
-      if (extracted.length === 0) {
-        setError("Agent 未能从纪要中提取到需求，请补充更具体的内容后重试。");
-      }
+      const res = await api.meetings.extract(tid, selected.id, false);
+      setDrafts(res.requirements as Draft[]);
+      setChecked(new Set(res.requirements.map((_, i) => i)));
     } catch (e) {
-      console.error(e);
-      setError("提取失败，请确认后端已启动且 Agent（claude/opencode）可用后重试。");
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setExtracting(false);
+      setBusy(false);
     }
-  }
+  };
 
-  function patchDraft(id: string, patch: Partial<DraftRequirement>) {
-    setDrafts((prev) => prev.map((d) => (d._id === id ? { ...d, ...patch } : d)));
-  }
-
-  function removeDraft(id: string) {
-    setDrafts((prev) => prev.filter((d) => d._id !== id));
-  }
-
-  async function handleAdoptAll() {
-    if (drafts.length === 0) return;
-    await addRequirements(
-      drafts.map((d) => ({
-        title: d.title,
-        description: d.description,
-        priority: d.priority,
-        acceptanceCriteria: d.acceptanceCriteria,
-        sourceMeetingId: sourceMeetingId || undefined,
-      })),
-    );
-    setAdoptedCount(drafts.length);
-    setDrafts([]);
-  }
+  const adopt = async () => {
+    if (!selected || !drafts) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const chosen = drafts.filter((_, i) => checked.has(i));
+      const created = await api.requirements.create(tid, chosen.map((d) => ({
+        ...d,
+        projectId: selected.projectId ?? null,
+        sourceMeetingId: selected.id,
+      })));
+      setCreatedCount(created.length);
+      setDrafts(null);
+      await refreshWorkspace();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Mic className="w-6 h-6 text-primary" />
-            会议纪要
-          </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            粘贴会议纪要，由 <span className="font-medium">需求架构师</span> Agent 自动提取结构化需求；人工评审后再采纳。
-          </p>
+      <PageHeader
+        title="会议纪要"
+        description="录入会议原始纪要，Agent 会自动提取带验收标准的需求；你挑选后再进入研发链路。"
+        actions={<Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="w-4 h-4 mr-2" /> 录入会议</Button>}
+      />
+
+      {error && <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-4 py-2">{error}</div>}
+      {createdCount != null && (
+        <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2">
+          已从会议采纳 {createdCount} 条需求，可在「需求管理」继续设计。
         </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Input */}
-        <Card className="lg:col-span-2 p-5 space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">会议标题</label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="例如：V1.0 需求评审会"
-            />
+      {!meetings.length ? (
+        <EmptyState icon={CalendarClock} title="还没有会议纪要" description="录入一场评审会或需求会，让 Agent 从自然语言纪要中提取结构化需求。" action={
+          <Button size="sm" className="mt-2" onClick={() => setCreateOpen(true)}><Plus className="w-4 h-4 mr-2" /> 录入会议</Button>
+        } />
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4 items-start">
+          <div className="space-y-2 xl:sticky xl:top-4">
+            {meetings.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => { setSelectedId(m.id); setDrafts(null); setCreatedCount(null); }}
+                className={`w-full text-left rounded-lg border p-3 transition-all ${selected?.id === m.id ? "border-primary bg-primary/5" : "bg-card hover:border-primary/30"}`}
+              >
+                <p className="text-sm font-medium line-clamp-2">{m.title}</p>
+                <div className="flex items-center gap-2 mt-2">
+                  <Pill tone={m.status === "extracted" ? "green" : "gray"}>{m.status === "extracted" ? "已提取" : "待提取"}</Pill>
+                  <span className="text-[11px] text-muted-foreground">{formatDate(m.createdAt)}</span>
+                </div>
+              </button>
+            ))}
           </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">参会人（逗号分隔，可选）</label>
-            <Input
-              value={participants}
-              onChange={(e) => setParticipants(e.target.value)}
-              placeholder="张伟, 李娜, 王强"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">会议纪要</label>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant={isRecording ? "destructive" : "ghost"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={isRecording ? stopRecording : startRecording}
-                >
-                  {isRecording ? (
-                    <>
-                      <Square className="w-3 h-3 mr-1" />
-                      停止录音
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="w-3 h-3 mr-1" />
-                      语音录入
-                    </>
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => {
-                    setTitle("V1.0 需求评审会");
-                    setNotes(SAMPLE_NOTES);
-                    setParticipants("张伟, 李娜, 王强, 赵敏");
-                  }}
-                >
-                  <Wand2 className="w-3 h-3 mr-1" />
-                  填入示例
-                </Button>
-              </div>
-            </div>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="粘贴会议纪要、结论、待办，或点击「语音录入」实时转写…"
-              className="w-full min-h-[260px] resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-            {isRecording && (
-              <p className="text-xs text-primary italic">
-                {interim ? `实时识别：${interim}` : "正在聆听…（请对麦克风说话）"}
-              </p>
-            )}
-          </div>
-          <Button className="w-full" disabled={!canExtract} onClick={handleExtract}>
-            {extracting ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Agent 提取中…
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 mr-2" />
-                Agent 提取需求
-              </>
-            )}
-          </Button>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </Card>
 
-        {/* Review / collaboration */}
-        <Card className="lg:col-span-3 p-5 flex flex-col">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold flex items-center gap-2">
-              <FileText className="w-4 h-4 text-primary" />
-              评审提取结果
-              {drafts.length > 0 && (
-                <Badge variant="secondary">{drafts.length} 条</Badge>
-              )}
-            </h3>
-            {drafts.length > 0 && (
-              <Button size="sm" onClick={handleAdoptAll}>
-                <CheckCircle2 className="w-4 h-4 mr-2" />
-                全部采纳到需求
-              </Button>
-            )}
-          </div>
-          <Separator className="mb-3" />
-
-          {adoptedCount !== null && (
-            <div className="mb-3 rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" />
-              已采纳 {adoptedCount} 条需求，可在「需求管理」中查看。
-              {onAdopted && (
-                <Button variant="link" size="sm" className="ml-auto h-auto p-0" onClick={onAdopted}>
-                  前往需求管理 →
-                </Button>
-              )}
-            </div>
-          )}
-
-          <ScrollArea className="flex-1 max-h-[520px] pr-3">
-            {drafts.length === 0 ? (
-              <div className="h-[420px] flex flex-col items-center justify-center text-center text-muted-foreground">
-                <Sparkles className="w-10 h-10 mb-3 opacity-40" />
-                <p className="text-sm">
-                  {extracting
-                    ? "需求架构师正在分析会议纪要…"
-                    : "提取的需求将显示在这里，供你逐条评审与编辑后再采纳。"}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {drafts.map((d) => (
-                  <div key={d._id} className="rounded-lg border p-3 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={d.title}
-                        onChange={(e) => patchDraft(d._id, { title: e.target.value })}
-                        className="h-8 font-medium"
-                      />
-                      <select
-                        value={d.priority}
-                        onChange={(e) =>
-                          patchDraft(d._id, {
-                            priority: e.target.value as DraftRequirement["priority"],
-                          })
-                        }
-                        className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
-                      >
-                        <option value="high">高</option>
-                        <option value="medium">中</option>
-                        <option value="low">低</option>
-                      </select>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() => removeDraft(d._id)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                    <textarea
-                      value={d.description}
-                      onChange={(e) => patchDraft(d._id, { description: e.target.value })}
-                      className="w-full min-h-[60px] resize-y rounded-md border border-input bg-transparent px-2 py-1.5 text-xs"
-                    />
-                    <div className="space-y-1">
-                      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                        验收标准
-                      </p>
-                      {d.acceptanceCriteria.map((c, idx) => (
-                        <div key={idx} className="flex items-center gap-2">
-                          <Badge variant={priorityVariant(d.priority)} className="text-[10px] h-5">
-                            {priorityLabel[d.priority]}
-                          </Badge>
-                          <input
-                            value={c}
-                            onChange={(e) => {
-                              const next = [...d.acceptanceCriteria];
-                              next[idx] = e.target.value;
-                              patchDraft(d._id, { acceptanceCriteria: next });
-                            }}
-                            className="flex-1 h-7 rounded-md border border-input bg-transparent px-2 text-xs"
-                          />
-                        </div>
-                      ))}
+          {selected && (
+            <div className="space-y-4 min-w-0">
+              <Card className="p-5">
+                <div className="flex flex-wrap justify-between items-start gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-xl font-bold">{selected.title}</h3>
+                    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1"><CalendarClock className="w-3.5 h-3.5" /> {formatDate(selected.createdAt)}</span>
+                      <span>·</span>
+                      <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> {selected.participants.map((p) => p.name).join("、") || "未记录参会人"}</span>
+                      <Badge variant="secondary" className="text-[10px]">{selected.source === "manual" ? "手工录入" : selected.source}</Badge>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </ScrollArea>
-        </Card>
-      </div>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={async () => {
+                      if (!confirm("删除这条会议纪要？已提取的需求不会被删除。")) return;
+                      await api.meetings.remove(tid, selected.id);
+                      setSelectedId(null);
+                      await refreshWorkspace();
+                    }}><Trash2 className="w-4 h-4" /></Button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t">
+                  <Button size="sm" onClick={extract} disabled={busy}>
+                    {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />} 提取需求
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => askAgent("请总结这场会议的决议、待办和风险，并给出需求优先级建议", { meetingId: selected.id, title: selected.title })}>
+                    <Bot className="w-4 h-4 mr-2" /> 让 Agent 总结
+                  </Button>
+                </div>
+              </Card>
+
+              {drafts && (
+                <Card className="p-5 border-primary/30">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div>
+                      <h4 className="font-semibold flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" /> Agent 提取结果（{drafts.length}）</h4>
+                      <p className="text-xs text-muted-foreground mt-0.5">勾选要采纳的需求，采纳后会关联来源会议并保留 Agent 运行记录。</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => setDrafts(null)}>取消</Button>
+                      <Button size="sm" disabled={busy || !checked.size} onClick={adopt}>
+                        {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckSquare2 className="w-4 h-4 mr-2" />} 采纳 {checked.size} 条
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {drafts.map((d, i) => (
+                      <div key={i} className={`rounded-lg border p-3 cursor-pointer ${checked.has(i) ? "border-primary bg-primary/5" : ""}`} onClick={() => {
+                        const next = new Set(checked);
+                        if (next.has(i)) next.delete(i); else next.add(i);
+                        setChecked(next);
+                      }}>
+                        <div className="flex gap-2">
+                          {checked.has(i) ? <CheckSquare2 className="w-4 h-4 text-primary shrink-0 mt-0.5" /> : <Square className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">{d.title}</p>
+                            <p className="text-xs text-muted-foreground mt-1">{d.description}</p>
+                            {!!d.acceptanceCriteria?.length && (
+                              <ul className="mt-2 space-y-1">
+                                {d.acceptanceCriteria.map((c, j) => <li key={j} className="text-[11px] text-muted-foreground">· {c}</li>)}
+                              </ul>
+                            )}
+                          </div>
+                          {d.priority && <Pill tone={d.priority === "high" ? "rose" : "gray"}>{statusLabel[d.priority] ?? d.priority}</Pill>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
+              <Card className="p-5">
+                <h4 className="text-sm font-semibold flex items-center gap-2 mb-3"><ClipboardList className="w-4 h-4" /> 原始纪要</h4>
+                <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed text-muted-foreground bg-muted/30 rounded-lg p-4 max-h-[420px] overflow-auto">{selected.rawNotes}</pre>
+              </Card>
+
+              <Card className="p-5">
+                <h4 className="text-sm font-semibold flex items-center gap-2 mb-3"><FileText className="w-4 h-4" /> 参会人</h4>
+                {selected.participants.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {selected.participants.map((p, i) => (
+                      <div key={i} className="flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold">{p.name.slice(0, 1)}</span>
+                        {p.name}{p.role && <span className="text-muted-foreground">· {p.role}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ) : <p className="text-sm text-muted-foreground">未记录参会人</p>}
+              </Card>
+            </div>
+          )}
+        </div>
+      )}
+
+      {createOpen && <MeetingModal projects={projects.map((p) => ({ id: p.id, name: p.name }))} onClose={() => setCreateOpen(false)} onCreated={async (id) => { setCreateOpen(false); setSelectedId(id); await refreshWorkspace(); }} />}
     </div>
+  );
+}
+
+function MeetingModal({ projects, onClose, onCreated }: {
+  projects: { id: string; name: string }[];
+  onClose: () => void;
+  onCreated: (id: string) => Promise<void>;
+}) {
+  const tenant = useSession((s) => s.currentTenant)!;
+  const [form, setForm] = useState({ title: "", rawNotes: "", participants: "", projectId: projects[0]?.id ?? "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const participants = form.participants.split(/[、,，\n]/).map((s) => s.trim()).filter(Boolean).map((name) => ({ name }));
+      const meeting = await api.meetings.create(tenant.tenant.id, {
+        title: form.title,
+        rawNotes: form.rawNotes,
+        participants,
+        projectId: form.projectId || null,
+        source: "manual",
+      });
+      await onCreated(meeting.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="录入会议纪要" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div>
+          <label className="text-sm font-medium">会议标题</label>
+          <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="mt-1.5" placeholder="例如：Q4 需求评审会" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-sm font-medium">参会人（顿号分隔）</label>
+            <Input value={form.participants} onChange={(e) => setForm({ ...form, participants: e.target.value })} className="mt-1.5" placeholder="张三、李四" />
+          </div>
+          <div>
+            <label className="text-sm font-medium">关联项目</label>
+            <select value={form.projectId} onChange={(e) => setForm({ ...form, projectId: e.target.value })} className="mt-1.5 w-full h-10 rounded-md border bg-background px-2 text-sm">
+              <option value="">不关联</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="text-sm font-medium">原始纪要</label>
+          <Textarea value={form.rawNotes} onChange={(v) => setForm({ ...form, rawNotes: v })} rows={10} placeholder="粘贴会议纪要原文。包含背景、讨论要点、决议与待办，Agent 提取效果更好。" />
+        </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="flex justify-end gap-2 border-t pt-3">
+          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button onClick={submit} disabled={busy || !form.title.trim() || !form.rawNotes.trim()}>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : "保存会议"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

@@ -12,12 +12,18 @@ config = context.config
 # Use the same DATABASE_URL as the app (do not hardcode credentials in alembic.ini).
 import os
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 config.set_main_option(
     "sqlalchemy.url",
     os.getenv(
         "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/transones",
-    ),
+        "postgresql://postgres:postgres@localhost:5432/transonce",
+    ).replace("%", "%%"),
 )
 
 # Interpret the config file for Python logging.

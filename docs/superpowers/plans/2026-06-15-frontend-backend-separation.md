@@ -194,7 +194,7 @@ Write `server/.env.example` with this content:
 
 ```env
 # Backend (Python/FastAPI) — copy to .env and adjust.
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/transones
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/transonce
 # Agent runtime provider: claude (Claude Code --print) or opencode (opencode run)
 AGENT_PROVIDER=claude
 AGENT_TIMEOUT_MS=180000

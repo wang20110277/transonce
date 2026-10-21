@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Node / frontend build
+node_modules/
+client/dist/
+client/.env
+npm-debug.log*
+
+# Local environment and secrets
+server/.env
+.env.local
+.env.*.local
+
+# Local reference repositories (not part of the app)
+aidevops/
+
+# Editor
+.idea/
+.vscode/

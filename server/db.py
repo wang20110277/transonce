@@ -1,4 +1,4 @@
-"""Postgres access for the transones backend (psycopg2).
+"""Postgres access for the transonce backend (psycopg2).
 
 Schema is managed by Alembic migrations under server/migrations/ — run
 `alembic upgrade head`. This module only handles the connection pool + helpers.
@@ -9,7 +9,7 @@ from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/transones"
+    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/transonce"
 )
 
 _pool: pool.SimpleConnectionPool | None = None
@@ -18,7 +18,7 @@ _pool: pool.SimpleConnectionPool | None = None
 def _get_pool() -> pool.SimpleConnectionPool:
     global _pool
     if _pool is None:
-        _pool = pool.SimpleConnectionPool(1, 10, DATABASE_URL)
+        _pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
     return _pool
 
 
@@ -49,6 +49,13 @@ def fetch_one(sql: str, args: tuple | None = None) -> dict | None:
         cur.execute(sql, args)
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def execute(sql: str, args: tuple | None = None) -> int:
+    """Run a statement and return affected row count."""
+    with cursor() as (cur, _):
+        cur.execute(sql, args)
+        return cur.rowcount
 
 
 def execute_returning(sql: str, args: tuple | None = None) -> dict | None:

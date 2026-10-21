@@ -1,4 +1,4 @@
-"""Transones ASR microservice — FunASR + SenseVoiceSmall (Python 3.12).
+"""TransOnce ASR microservice — FunASR + SenseVoiceSmall (Python 3.12).
 
 Runs separately from the main backend (which is Python 3.14 and has no torch).
 Loads the local SenseVoice model once at startup; exposes POST /asr.
@@ -29,7 +29,7 @@ LANGUAGE = os.environ.get("SENSEVOICE_LANGUAGE", "zh")
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("asr")
 
-app = FastAPI(title="transones-asr")
+app = FastAPI(title="transonce-asr")
 _model = None
 
 

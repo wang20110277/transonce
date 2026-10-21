@@ -21,7 +21,7 @@ The goal is a clean separation: move the frontend into its own folder (`client/`
 ## 3. Target structure
 
 ```
-transones/
+transonce/
 ├── client/                  # Frontend (Vite + React + TS) — NEW home
 │   ├── src/                 #   App.tsx, main.tsx, components, agents, lib, services
 │   ├── components/          #   shadcn ui (moved from /components)
