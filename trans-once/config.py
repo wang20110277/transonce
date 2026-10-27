@@ -22,6 +22,15 @@ AGENT_CLI_DISALLOWED_TOOLS = os.getenv(
     "AGENT_CLI_DISALLOWED_TOOLS",
     "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch",
 )
+# Multica-style execution: the CLI runs as an autonomous agent in a private
+# per-run workspace (contract file + tool access + longer budget), instead of
+# one-shot, tool-disabled JSON generation.
+AGENT_EXECUTION_MODE = os.getenv("AGENT_EXECUTION_MODE", "text")  # text | agentic
+AGENT_AGENTIC_TIMEOUT_MS = int(os.getenv("AGENT_AGENTIC_TIMEOUT_MS", "600000"))
+# Tools blocked in agentic runs; empty grants full tool access, matching how a
+# local agent run works. The per-run workspace and env whitelist below remain
+# the containment boundary.
+AGENT_AGENTIC_DISALLOWED_TOOLS = os.getenv("AGENT_AGENTIC_DISALLOWED_TOOLS", "")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_NAME = os.getenv("ADMIN_NAME", "超级管理员")

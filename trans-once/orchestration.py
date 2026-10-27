@@ -105,7 +105,11 @@ def start_run(ctx: TenantContext, task_type: str, input_text: str, agent_id: str
             agent["id"] if agent else None,
             task_type,
             input_text[:20000],
-            Json([{"at": _now(), "message": f"{task_type} 开始执行"}]),
+            Json([{
+                "at": _now(),
+                "message": f"{task_type} 开始执行（provider={agents.runtime_info()['provider']}，"
+                           f"mode={agents.runtime_info()['mode']}）",
+            }]),
             ctx.user["id"],
         ),
     )

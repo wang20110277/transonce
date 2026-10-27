@@ -8,10 +8,15 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import uuid
+from datetime import datetime, timezone
 
 import mock_agent
 from config import (
+    AGENT_AGENTIC_DISALLOWED_TOOLS,
+    AGENT_AGENTIC_TIMEOUT_MS,
     AGENT_CLI_DISALLOWED_TOOLS,
+    AGENT_EXECUTION_MODE,
     AGENT_FALLBACK_MOCK,
     AGENT_MAX_PROMPT_CHARS,
     AGENT_PROVIDER,
@@ -42,6 +47,38 @@ def _agent_workdir() -> str:
 
 
 JSON_ONLY = "只输出 JSON，不要任何解释、前后缀或 markdown 代码块。"
+
+CONTRACT_RULES = """## 运行规则
+
+- 你在一个专属于本次运行的临时工作目录中自主工作，可以读写本目录并在其中执行命令来完成任务。
+- 不要离开本目录去读写其他路径；TransOnce 的数据库与密钥对你不可达，也不要尝试访问。
+- 完成任务后，最终回复只包含任务要求的结果本身，不要附加解释、前后缀或多余内容。"""
+
+
+def _resolve_agentic(agentic: bool | None) -> bool:
+    if agentic is not None:
+        return agentic
+    return AGENT_EXECUTION_MODE == "agentic"
+
+
+def _new_run_workdir() -> str:
+    """A private workspace per agent run — the way a local agent runtime gives
+    each run its own sandbox. Stays outside the platform tree so the CLI can
+    never reach .env or database credentials."""
+    base = AGENT_WORKDIR or os.path.join(tempfile.gettempdir(), "transonce-agent")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_dir = os.path.join(base, f"run-{stamp}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
+
+
+def _write_contract(run_dir: str, system_prompt: str) -> None:
+    """Drop the run contract into the workspace; CLIs pick it up from their
+    cwd (Claude Code reads CLAUDE.md, opencode reads AGENTS.md)."""
+    content = f"# TransOnce Agent 运行契约\n\n{system_prompt}\n\n{CONTRACT_RULES}\n"
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        with open(os.path.join(run_dir, name), "w", encoding="utf-8") as fh:
+            fh.write(content)
 
 ROLE_PROMPTS = {
     "extractor": "你是 TransOnce 平台的「需求架构师」Agent。从会议纪要中提取结构化的产品需求。",
@@ -77,31 +114,54 @@ def get_provider(requested: str | None = None) -> str:
     return "mock"
 
 
-def run_agent_text(system_prompt: str, user_prompt: str, provider: str | None = None) -> str:
+def run_agent_text(
+    system_prompt: str,
+    user_prompt: str,
+    provider: str | None = None,
+    agentic: bool | None = None,
+    json_only: bool = True,
+) -> str:
     p = get_provider(provider)
     if p == "mock":
         return mock_agent.chat_reply(user_prompt)
-    combined = f"{system_prompt}\n\n{JSON_ONLY}\n\n===\n\n{user_prompt}"
+    mode = _resolve_agentic(agentic)
+    header = system_prompt if not json_only else f"{system_prompt}\n\n{JSON_ONLY}"
+    combined = f"{header}\n\n===\n\n{user_prompt}"
     if len(combined) > AGENT_MAX_PROMPT_CHARS:
         combined = combined[:AGENT_MAX_PROMPT_CHARS] + "\n\n[内容过长，已截断]"
+    if mode:
+        # Multica-style autonomous run: private workspace, contract file,
+        # tool access, longer budget.
+        cwd = _new_run_workdir()
+        _write_contract(cwd, system_prompt)
+        timeout_ms = AGENT_AGENTIC_TIMEOUT_MS
+        disallowed = AGENT_AGENTIC_DISALLOWED_TOOLS
+    else:
+        cwd = _agent_workdir()
+        timeout_ms = AGENT_TIMEOUT_MS
+        disallowed = AGENT_CLI_DISALLOWED_TOOLS
     if p == "claude":
         # Prompt goes over stdin: avoids argv limits and keeps notes out of `ps`.
         args = ["--print", "--output-format", "text"]
-        if AGENT_CLI_DISALLOWED_TOOLS:
-            args += ["--disallowedTools", AGENT_CLI_DISALLOWED_TOOLS]
+        if disallowed:
+            args += ["--disallowedTools", disallowed]
+        if mode:
+            # Autonomous run needs unattended tool use; containment is the
+            # throwaway workspace plus the env whitelist, not permission prompts.
+            args.append("--dangerously-skip-permissions")
         stdin_text: str | None = combined
     else:
         # `opencode run` takes the message as argv; length is capped above.
         args = ["run", combined]
         stdin_text = None
-    timeout = AGENT_TIMEOUT_MS / 1000
+    timeout = timeout_ms / 1000
     proc = subprocess.Popen(
         [p] + args,
         stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        cwd=_agent_workdir(),
+        cwd=cwd,
         env=_child_env(),
         start_new_session=True,
     )
@@ -117,6 +177,15 @@ def run_agent_text(system_prompt: str, user_prompt: str, provider: str | None = 
     if proc.returncode != 0:
         raise RuntimeError(f"agent ({p}) exited {proc.returncode}: {(stderr or '')[:800]}")
     return stdout
+
+
+def runtime_info() -> dict:
+    """Cheap snapshot for run records: which provider and execution mode a run
+    would use right now."""
+    return {
+        "provider": get_provider(),
+        "mode": "agentic" if _resolve_agentic(None) else "text",
+    }
 
 
 def parse_agent_json(text: str):
@@ -258,6 +327,7 @@ def chat_reply(
             system + "\n请用简洁中文回答，必要时给出可执行的下一步。",
             f"对话历史：\n{hist}\n\n用户：{message}",
             p,
+            json_only=False,
         )
         return text.strip()[:4000]
     except Exception as e:

@@ -129,7 +129,9 @@ Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直
 
 ```env
 AGENT_PROVIDER=mock          # mock | auto | claude | opencode
+AGENT_EXECUTION_MODE=text    # text | agentic（见下方执行方式）
 AGENT_TIMEOUT_MS=180000
+AGENT_AGENTIC_TIMEOUT_MS=600000
 AGENT_FALLBACK_MOCK=true
 ```
 
@@ -138,6 +140,9 @@ AGENT_FALLBACK_MOCK=true
 - `opencode`：调用 `opencode run`，需先配置 opencode。
 - `auto`：跟随 `AGENT_PROVIDER` 的显式值；Agent 级配置可选择 `auto|claude|opencode|mock`。
 - 调用失败且 `AGENT_FALLBACK_MOCK=true` 时自动回退 mock，保证链路可演示。
+- 执行方式 `AGENT_EXECUTION_MODE`：
+  - `text`（默认）：一次性 JSON 生成，禁用 CLI 工具，行为确定，适合演示与 CI。
+  - `agentic`：与 Multica 本地 agent 相同的运行方式——每次运行分配独立临时工作目录、写入运行契约文件（`CLAUDE.md` / `AGENTS.md`）、开放工具自主执行、放宽超时（`AGENT_AGENTIC_TIMEOUT_MS`，默认 10 分钟）。子进程环境白名单与工作目录隔离保证 agent 无法接触数据库与密钥。
 
 每个租户内可查看/编辑自己的 Agent（名称、Provider、模型、提示词、工具集）。Agent 以所属用户权限执行，无法读取环境明文密钥，也无法绕过生产发布审批。
 
