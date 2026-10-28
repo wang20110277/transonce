@@ -130,7 +130,7 @@ export const api = {
     createSystem: (tid: string, pid: string, body: { name: string; description?: string }) =>
       post<System>(`${T(tid)}/projects/${pid}/systems`, body),
     removeSystem: (tid: string, sid: string) => del<{ ok: true }>(`${T(tid)}/systems/${sid}`),
-    createCodebase: (tid: string, sid: string, body: { name: string; repoUrl?: string; language?: string; defaultBranch?: string }) =>
+    createCodebase: (tid: string, sid: string, body: { name?: string; repoId?: string; repoUrl?: string; language?: string; defaultBranch?: string }) =>
       post<Codebase>(`${T(tid)}/systems/${sid}/codebases`, body),
     removeCodebase: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/codebases/${cid}`),
   },

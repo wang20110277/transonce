@@ -51,13 +51,36 @@ def _member(tenant_id: str, user: dict, role: dict, admin: bool = False) -> dict
     )
 
 
+def _link_demo_codebases(tenant_id: str, conn_id: str) -> None:
+    """把演示租户手工登记的代码库挂接到同步目录（幂等，只补 repo_id 为空的行）。"""
+    repos = {r["path"]: r for r in db.fetch_all(
+        "SELECT * FROM git_repos WHERE connection_id=%s", (conn_id,)
+    )}
+    for cb in db.fetch_all(
+        """SELECT c.id, c.name FROM codebases c
+           JOIN systems s ON s.id=c.system_id JOIN projects p ON p.id=s.project_id
+           WHERE p.tenant_id=%s AND c.repo_id IS NULL""",
+        (tenant_id,),
+    ):
+        repo = next((r for path, r in repos.items() if path.endswith(f"/{cb['name']}")), None)
+        if repo:
+            db.execute(
+                "UPDATE codebases SET repo_id=%s, repo_url=%s, default_branch=%s WHERE id=%s",
+                (repo["id"], repo["web_url"], repo["default_branch"], cb["id"]),
+            )
+
+
 def _seed_coderepos(tenant: dict, admin: dict, product: dict, dev: dict) -> None:
     """Demo GitLab connection + repos + one grant + one pending request.
 
     Guarded on existing connections so it stays idempotent and never touches
     tenants whose admins configured their own links.
     """
-    if db.fetch_one("SELECT id FROM gitlab_connections WHERE tenant_id=%s", (tenant["id"],)):
+    existing = db.fetch_one(
+        "SELECT id FROM gitlab_connections WHERE tenant_id=%s", (tenant["id"],)
+    )
+    if existing:
+        _link_demo_codebases(str(tenant["id"]), str(existing["id"]))
         return
     log.info("seeding demo code repos")
     from routers.coderepos import upsert_projects
@@ -72,10 +95,10 @@ def _seed_coderepos(tenant: dict, admin: dict, product: dict, dev: dict) -> None
         ),
     )
     count = upsert_projects(conn, gitlab_client.demo_projects())
-    repos = {r["path"]: r for r in db.fetch_all(
-        "SELECT * FROM git_repos WHERE connection_id=%s", (conn["id"],)
-    )}
-    api_repo, web_repo = repos.get("innovatech/retail-api"), repos.get("innovatech/retail-web")
+    _link_demo_codebases(str(tenant["id"]), str(conn["id"]))
+    def _repo(path: str) -> dict | None:
+        return db.fetch_one("SELECT * FROM git_repos WHERE connection_id=%s AND path=%s", (conn["id"], path))
+    api_repo, web_repo = _repo("innovatech/retail-api"), _repo("innovatech/retail-web")
     if api_repo:
         db.execute(
             """INSERT INTO repo_access_grants (tenant_id, repo_id, user_id, role, granted_by)

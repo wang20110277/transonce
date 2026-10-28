@@ -159,6 +159,8 @@ def codebase(r: dict) -> dict:
         "repoUrl": r.get("repo_url"),
         "language": r.get("language"),
         "defaultBranch": r.get("default_branch"),
+        "repoId": _s(r.get("repo_id")),
+        "repoPath": r.get("repo_path"),
         "createdAt": _iso(r.get("created_at")),
     }
 

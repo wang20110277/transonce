@@ -7,12 +7,12 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PageHeader, EmptyState, Textarea, formatDate } from "../components/common";
+import { PageHeader, EmptyState, Select, Textarea, formatDate } from "../components/common";
 import { Modal } from "../components/TeamSelect";
 import { api } from "../services/api";
 import { useSession } from "../lib/session";
 import { refreshWorkspace, useWorkspace } from "../lib/store";
-import type { System } from "../types";
+import type { GitRepo, System } from "../types";
 
 export function Projects() {
   const tenant = useSession((s) => s.currentTenant)!;
@@ -163,9 +163,11 @@ function SystemList({ tid, projectId, systems, onChanged }: {
   systems: System[];
   onChanged: () => Promise<void>;
 }) {
+  const syncedRepos = useWorkspace((s) => s.repos);
   const [addSystem, setAddSystem] = useState(false);
   const [systemForm, setSystemForm] = useState({ name: "", description: "" });
   const [addCodebaseFor, setAddCodebaseFor] = useState<System | null>(null);
+  const [pickedRepoId, setPickedRepoId] = useState("");
   const [codeForm, setCodeForm] = useState({ name: "", repoUrl: "", language: "TypeScript", defaultBranch: "main" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -211,7 +213,8 @@ function SystemList({ tid, projectId, systems, onChanged }: {
               {(s.codebases ?? []).map((c) => (
                 <div key={c.id} className="flex items-center gap-2 text-xs rounded-md border bg-background px-2.5 py-1.5">
                   <GitBranch className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="font-medium">{c.name}</span>
+                  <span className="font-medium" title={c.repoPath ?? c.name}>{c.repoPath ?? c.name}</span>
+                  {c.repoPath && <Badge variant="secondary" className="text-[10px]">GitLab</Badge>}
                   {c.language && <Badge variant="secondary" className="text-[10px]">{c.language}</Badge>}
                   {c.repoUrl && (
                     <a href={c.repoUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -253,35 +256,116 @@ function SystemList({ tid, projectId, systems, onChanged }: {
 
       {addCodebaseFor && (
         <Modal title={`为「${addCodebaseFor.name}」添加代码库`} onClose={() => setAddCodebaseFor(null)}>
-          <div className="space-y-3">
-            <div>
-              <label className="text-sm font-medium">代码库名称</label>
-              <Input value={codeForm.name} onChange={(e) => setCodeForm({ ...codeForm, name: e.target.value })} className="mt-1.5" placeholder="例如：order-service" />
-            </div>
-            <div>
-              <label className="text-sm font-medium">仓库地址</label>
-              <Input value={codeForm.repoUrl} onChange={(e) => setCodeForm({ ...codeForm, repoUrl: e.target.value })} className="mt-1.5" placeholder="https://github.com/org/repo" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium">语言</label>
-                <Input value={codeForm.language} onChange={(e) => setCodeForm({ ...codeForm, language: e.target.value })} className="mt-1.5" />
-              </div>
-              <div>
-                <label className="text-sm font-medium">默认分支</label>
-                <Input value={codeForm.defaultBranch} onChange={(e) => setCodeForm({ ...codeForm, defaultBranch: e.target.value })} className="mt-1.5" />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setAddCodebaseFor(null)}>取消</Button>
-              <Button disabled={busy || !codeForm.name.trim()} onClick={() => guard(async () => {
-                await api.projects.createCodebase(tid, addCodebaseFor.id, codeForm);
-                setAddCodebaseFor(null); setCodeForm({ name: "", repoUrl: "", language: "TypeScript", defaultBranch: "main" });
-              })}>添加</Button>
-            </div>
-          </div>
+          <AddCodebaseForm
+            tid={tid}
+            system={addCodebaseFor}
+            linkedPaths={new Set((addCodebaseFor.codebases ?? []).map((c) => c.repoPath).filter(Boolean) as string[])}
+            syncedRepos={syncedRepos}
+            pickedRepoId={pickedRepoId}
+            setPickedRepoId={setPickedRepoId}
+            codeForm={codeForm}
+            setCodeForm={setCodeForm}
+            busy={busy}
+            guard={guard}
+            onClose={() => setAddCodebaseFor(null)}
+          />
         </Modal>
       )}
+    </div>
+  );
+}
+
+function AddCodebaseForm({
+  tid, system, linkedPaths, syncedRepos, pickedRepoId, setPickedRepoId,
+  codeForm, setCodeForm, busy, guard, onClose,
+}: {
+  tid: string;
+  system: System;
+  linkedPaths: Set<string>;
+  syncedRepos: GitRepo[];
+  pickedRepoId: string;
+  setPickedRepoId: (v: string) => void;
+  codeForm: { name: string; repoUrl: string; language: string; defaultBranch: string };
+  setCodeForm: (f: { name: string; repoUrl: string; language: string; defaultBranch: string }) => void;
+  busy: boolean;
+  guard: (fn: () => Promise<void>) => Promise<void>;
+  onClose: () => void;
+}) {
+  const picked = syncedRepos.find((r) => r.id === pickedRepoId) ?? null;
+  const pickable = syncedRepos.filter((r) => !linkedPaths.has(r.path));
+
+  const pick = (id: string) => {
+    setPickedRepoId(id);
+    const repo = syncedRepos.find((r) => r.id === id);
+    if (repo) {
+      setCodeForm({
+        name: repo.name,
+        repoUrl: repo.webUrl ?? "",
+        language: codeForm.language,
+        defaultBranch: repo.defaultBranch ?? "main",
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {pickable.length > 0 && (
+        <div>
+          <label className="text-sm font-medium">从代码管理选取</label>
+          <Select value={pickedRepoId} onChange={(v) => pick(v)} className="mt-1.5 w-full h-10">
+            <option value="">手动填写…</option>
+            {pickable.map((r) => (
+              <option key={r.id} value={r.id}>{r.path}（{r.connectionName}）</option>
+            ))}
+          </Select>
+          {picked && (
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              名称 / 仓库地址 / 默认分支已按「{picked.path}」自动带出，仍可在下方微调。
+            </p>
+          )}
+        </div>
+      )}
+      {pickable.length === 0 && syncedRepos.length > 0 && (
+        <p className="text-xs text-muted-foreground">该系统已关联全部同步的代码库，可切换手动填写。</p>
+      )}
+      {syncedRepos.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          尚无可选取的代码库——管理员在「代码管理」同步 GitLab 后，这里可以直接选取。
+        </p>
+      )}
+      <div>
+        <label className="text-sm font-medium">代码库名称</label>
+        <Input value={codeForm.name} onChange={(e) => setCodeForm({ ...codeForm, name: e.target.value })} className="mt-1.5" placeholder="例如：order-service" />
+      </div>
+      <div>
+        <label className="text-sm font-medium">仓库地址</label>
+        <Input value={codeForm.repoUrl} onChange={(e) => setCodeForm({ ...codeForm, repoUrl: e.target.value })} className="mt-1.5" placeholder="https://github.com/org/repo" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-sm font-medium">语言</label>
+          <Input value={codeForm.language} onChange={(e) => setCodeForm({ ...codeForm, language: e.target.value })} className="mt-1.5" />
+        </div>
+        <div>
+          <label className="text-sm font-medium">默认分支</label>
+          <Input value={codeForm.defaultBranch} onChange={(e) => setCodeForm({ ...codeForm, defaultBranch: e.target.value })} className="mt-1.5" />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>取消</Button>
+        <Button disabled={busy || (!pickedRepoId && !codeForm.name.trim())} onClick={() => guard(async () => {
+          await api.projects.createCodebase(tid, system.id, {
+            name: codeForm.name,
+            repoId: pickedRepoId || undefined,
+            repoUrl: codeForm.repoUrl || undefined,
+            language: codeForm.language || undefined,
+            defaultBranch: codeForm.defaultBranch || undefined,
+          });
+          onClose();
+          setPickedRepoId("");
+          setCodeForm({ name: "", repoUrl: "", language: "TypeScript", defaultBranch: "main" });
+        })}>添加</Button>
+      </div>
     </div>
   );
 }

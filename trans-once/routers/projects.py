@@ -89,7 +89,12 @@ def list_systems(tenant_id: str, project_id: str, user: dict = Depends(get_curre
         item = serializers.system(s)
         item["codebases"] = [
             serializers.codebase(c)
-            for c in db.fetch_all("SELECT * FROM codebases WHERE system_id=%s ORDER BY created_at", (s["id"],))
+            for c in db.fetch_all(
+                """SELECT c.*, r.path AS repo_path FROM codebases c
+                   LEFT JOIN git_repos r ON r.id=c.repo_id
+                   WHERE c.system_id=%s ORDER BY c.created_at""",
+                (s["id"],),
+            )
         ]
         out.append(item)
     return out
@@ -123,16 +128,41 @@ def delete_system(tenant_id: str, system_id: str, user: dict = Depends(get_curre
 def create_codebase(tenant_id: str, system_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id)
     _system_or_404(tenant_id, system_id)
-    name = (body.get("name") or "").strip()
-    if not name:
-        raise HTTPException(400, "请输入代码库名称")
+    repo = None
+    if body.get("repoId"):
+        # linked pick from 代码管理: fields come from the synced repo row
+        repo = db.fetch_one(
+            "SELECT * FROM git_repos WHERE id=%s AND tenant_id=%s", (body["repoId"], tenant_id)
+        )
+        if not repo:
+            raise HTTPException(400, "代码库不存在或不属于当前租户")
+        dup = db.fetch_one(
+            "SELECT id FROM codebases WHERE system_id=%s AND repo_id=%s", (system_id, repo["id"])
+        )
+        if dup:
+            raise HTTPException(400, "该系统已关联此代码库")
+        name = (body.get("name") or "").strip() or repo["path"]
+        repo_url = body.get("repoUrl") or repo.get("web_url")
+        default_branch = body.get("defaultBranch") or repo.get("default_branch") or "main"
+    else:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "请输入代码库名称")
+        repo_url = body.get("repoUrl")
+        default_branch = body.get("defaultBranch") or "main"
     row = db.execute_returning(
-        """INSERT INTO codebases (system_id, name, repo_url, language, default_branch)
-           VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-        (system_id, name, body.get("repoUrl"), body.get("language"), body.get("defaultBranch") or "main"),
+        """INSERT INTO codebases (system_id, name, repo_url, language, default_branch, repo_id)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING *""",
+        (system_id, name, repo_url, body.get("language"), default_branch, repo["id"] if repo else None),
     )
-    log_activity(ctx, "codebase.created", {"name": name})
-    return serializers.codebase(row)
+    log_activity(
+        ctx, "codebase.created",
+        {"name": name, **({"repo": repo["path"]} if repo else {})},
+    )
+    enriched = dict(row)
+    if repo:
+        enriched["repo_path"] = repo["path"]
+    return serializers.codebase(enriched)
 
 
 @router.delete("/codebases/{codebase_id}")

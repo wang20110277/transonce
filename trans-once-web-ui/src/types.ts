@@ -123,6 +123,8 @@ export type Codebase = {
   repoUrl?: string | null;
   language?: string | null;
   defaultBranch?: string | null;
+  repoId?: string | null;
+  repoPath?: string | null;
 };
 
 export type ChatMessage = {

@@ -250,6 +250,31 @@ def main() -> int:
     )
     check("product cannot approve access", status == 403, f"status {status}")
 
+    print("\n[project codebase link]")
+    _, projects = call("GET", f"/api/tenants/{tenant_id}/projects", token=admin["token"])
+    check("projects listed", len(projects) > 0)
+    if projects:
+        _, systems = call("GET", f"/api/tenants/{tenant_id}/projects/{projects[0]['id']}/systems", token=admin["token"])
+        system = systems[0] if systems else None
+        check("systems listed", system is not None)
+        if system and repos:
+            linked = {c.get("repoId") for c in (system.get("codebases") or [])}
+            free = next((r for r in repos if r["id"] not in linked), None)
+            if free:
+                _, created = call(
+                    "POST", f"/api/tenants/{tenant_id}/systems/{system['id']}/codebases",
+                    {"repoId": free["id"], "language": "Python"}, token=admin["token"],
+                )
+                check("codebase created from synced repo", created.get("repoPath") == free["path"])
+                dup_status, _ = call(
+                    "POST", f"/api/tenants/{tenant_id}/systems/{system['id']}/codebases",
+                    {"repoId": free["id"]}, token=admin["token"], expect=None,
+                )
+                check("duplicate repo link rejected", dup_status == 400, f"status {dup_status}")
+                call("DELETE", f"/api/tenants/{tenant_id}/codebases/{created['id']}", token=admin["token"])
+            else:
+                check("codebase created from synced repo", True, "all repos already linked")
+
     print("\n[permission catalog]")
     _, catalog = call("GET", "/api/permissions", token=admin["token"])
     items = catalog.get("items") if isinstance(catalog, dict) else catalog
