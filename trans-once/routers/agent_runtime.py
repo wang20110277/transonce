@@ -4,6 +4,7 @@
 所选 CLI 自己的枚举结果；枚举不了的给说明并保留手动输入，绝不静默
 接受一个不会生效的值。
 """
+import os
 import shutil
 import subprocess
 import time
@@ -19,8 +20,9 @@ router = APIRouter(prefix="/api", tags=["agent-runtime"], dependencies=[Depends(
 _TTL_SECONDS = 300
 _cache: dict = {"at": 0.0, "payload": None}
 
-# claude CLI 不支持枚举模型（--model 只接受别名或完整名，见 claude --help），
-# 以下别名来自该帮助文档；完整模型名仍可手动输入。
+# claude CLI 不支持枚举模型（--model 只接受别名或完整名，见 claude --help）。
+# 本机常通过 ANTHROPIC_DEFAULT_*_MODEL_NAME 把别名映射到真实模型（如 GLM-5.3），
+# 优先读映射展示真实模型；读不到再退回 CLI 帮助文档保证的别名。
 _CLAUDE_ALIASES = ["sonnet", "opus", "haiku", "fable"]
 
 
@@ -47,6 +49,26 @@ def _opencode_models() -> tuple[list[dict], str | None]:
     return models, None
 
 
+def _claude_models() -> tuple[list[dict], str]:
+    mapping = {
+        alias: os.getenv(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL_NAME")
+        for alias in _CLAUDE_ALIASES
+    }
+    mapping = {a: real for a, real in mapping.items() if real}
+    if not mapping:
+        return (
+            [{"id": a, "provider": "claude"} for a in _CLAUDE_ALIASES],
+            "Claude Code 不支持枚举模型：候选为 CLI 别名，也可手动输入完整模型名。",
+        )
+    real_names: list[str] = []
+    for real in mapping.values():
+        if real not in real_names:
+            real_names.append(real)
+    summary = "、".join(f"{a}→{r}" for a, r in mapping.items())
+    note = f"已读取本机 Claude Code 模型映射（{summary}）；留空即用默认，选真实模型名最准确。"
+    return [{"id": r, "provider": "claude"} for r in real_names], note
+
+
 @router.get("/agent-runtime")
 def agent_runtime() -> dict:
     now = time.time()
@@ -55,6 +77,7 @@ def agent_runtime() -> dict:
     oc_models, oc_error = (
         _opencode_models() if _installed("opencode") else ([], "本机未安装 opencode")
     )
+    cl_models, cl_note = _claude_models()
     payload = {
         "providers": {
             "auto": {
@@ -72,8 +95,8 @@ def agent_runtime() -> dict:
             "claude": {
                 "installed": _installed("claude"),
                 "supported": True,
-                "models": [{"id": a, "provider": "claude"} for a in _CLAUDE_ALIASES],
-                "note": "Claude Code 不支持枚举模型：候选为 CLI 别名，也可手动输入完整模型名。",
+                "models": cl_models,
+                "note": cl_note,
             },
             "opencode": {
                 "installed": _installed("opencode"),
