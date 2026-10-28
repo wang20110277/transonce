@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import agents
 import db
 from config import CORS_ORIGINS, SEED_DEMO
-from routers import agent_runtime, agentchat, auth, devops, pipeline, projects, tenants
+from routers import agent_runtime, agentchat, auth, coderepos, devops, pipeline, projects, tenants
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("transonce")
@@ -52,6 +52,7 @@ app.include_router(tenants.router)
 app.include_router(projects.router)
 app.include_router(pipeline.router)
 app.include_router(devops.router)
+app.include_router(coderepos.router)
 app.include_router(agentchat.router)
 
 

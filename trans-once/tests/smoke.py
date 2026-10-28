@@ -6,8 +6,9 @@ Usage (backend must be running on :9005 and seeded):
     API_BASE=http://localhost:9005 python3 tests/smoke.py
 
 The suite is intentionally non-destructive: it only reads data, reveals a
-masked secret (which writes an audit log), runs a monitor health check, and
-creates/deletes one throwaway conversation. No tenant, requirement, task or
+masked secret (which writes an audit log), runs a monitor health check,
+creates/deletes one throwaway conversation, and settles one repo access
+request (idempotent across re-runs). No tenant, requirement, task or
 artifact is created or removed.
 """
 from __future__ import annotations
@@ -24,6 +25,8 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 PRODUCT_EMAIL = os.getenv("PRODUCT_EMAIL", "product@transonce.local")
 PRODUCT_PASSWORD = os.getenv("PRODUCT_PASSWORD", "demo123")
+DEV_EMAIL = os.getenv("DEV_EMAIL", "dev@transonce.local")
+DEV_PASSWORD = os.getenv("DEV_PASSWORD", "demo123")
 
 passed = 0
 failed: list[str] = []
@@ -194,6 +197,58 @@ def main() -> int:
         drafts = extracted.get("requirements") or []
         check("extraction returns drafts", len(drafts) > 0)
         check("drafts have titles", all((d.get("title") or "").strip() for d in drafts))
+
+    print("\n[code repos]")
+    _, conns = call("GET", f"/api/tenants/{tenant_id}/gitlab/connections", token=admin["token"])
+    check("gitlab connections listed", len(conns) >= 1)
+    check("connection token only exposed as mask", all(
+        not c.get("token") and (not c.get("hasToken") or bool(c.get("tokenMasked"))) for c in conns
+    ))
+    _, repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=product["token"])
+    check("repos visible to product", len(repos) > 0)
+    check("repos carry per-user access state", all("myAccess" in r and "myRequest" in r for r in repos))
+    retail_api = next((r for r in repos if r.get("path") == "innovatech/retail-api"), None)
+    retail_web = next((r for r in repos if r.get("path") == "innovatech/retail-web"), None)
+    check("seeded repos present", retail_api is not None and retail_web is not None)
+    dev = login(DEV_EMAIL, DEV_PASSWORD)
+    _, dev_repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=dev["token"])
+    check("dev role sees repos (menu permission migrated)", len(dev_repos) > 0)
+    dev_api = next((r for r in dev_repos if r.get("path") == "innovatech/retail-api"), None)
+    check("seeded developer grant annotated", (dev_api or {}).get("myAccess", {}).get("role") == "developer")
+    status, _ = call(
+        "POST", f"/api/tenants/{tenant_id}/gitlab/connections",
+        {"name": "smoke", "baseUrl": "https://gitlab.invalid", "token": "t", "mode": "live"},
+        token=product["token"], expect=None,
+    )
+    check("product cannot link gitlab", status == 403, f"status {status}")
+    _, reqs = call("GET", f"/api/tenants/{tenant_id}/repo-access-requests", token=admin["token"])
+    check("access requests listable by approver", isinstance(reqs, list) and len(reqs) >= 1)
+    pending = next(
+        (r for r in reqs if r.get("status") == "pending" and r.get("repoPath") == "innovatech/retail-web"), None
+    )
+    if not pending and retail_web and not retail_web.get("myAccess"):
+        # a previous run never completed the request — recreate it
+        _, pending = call(
+            "POST", f"/api/tenants/{tenant_id}/repos/{retail_web['id']}/access-requests",
+            {"role": "developer", "reason": "smoke re-run"}, token=product["token"],
+        )
+    if pending:
+        _, approved = call(
+            "POST", f"/api/tenants/{tenant_id}/repo-access-requests/{pending['id']}/approve",
+            {"note": "smoke"}, token=admin["token"],
+        )
+        check("access request approved", approved.get("status") == "approved")
+        _, repos2 = call("GET", f"/api/tenants/{tenant_id}/repos", token=product["token"])
+        web2 = next((r for r in repos2 if r.get("path") == "innovatech/retail-web"), None)
+        check("granted role annotated on repo list", (web2 or {}).get("myAccess", {}).get("role") == "developer")
+    else:
+        check("access request approved", (retail_web or {}).get("myAccess", {}).get("role") == "developer", "previously granted")
+    fake = str(uuid.uuid4())
+    status, _ = call(
+        "POST", f"/api/tenants/{tenant_id}/repo-access-requests/{fake}/approve",
+        {}, token=product["token"], expect=None,
+    )
+    check("product cannot approve access", status == 403, f"status {status}")
 
     print("\n[permission catalog]")
     _, catalog = call("GET", "/api/permissions", token=admin["token"])

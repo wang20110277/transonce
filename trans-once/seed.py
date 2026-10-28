@@ -10,6 +10,7 @@ import logging
 from psycopg2.extras import Json
 
 import db
+import gitlab_client
 import mock_agent
 import orchestration
 from config import ADMIN_EMAIL, ADMIN_NAME, ADMIN_PASSWORD, DEFAULT_ROLE
@@ -48,6 +49,58 @@ def _member(tenant_id: str, user: dict, role: dict, admin: bool = False) -> dict
            VALUES (%s, %s, %s, 'active', %s, now()) RETURNING *""",
         (tenant_id, user["id"], role["id"], admin),
     )
+
+
+def _seed_coderepos(tenant: dict, admin: dict, product: dict, dev: dict) -> None:
+    """Demo GitLab connection + repos + one grant + one pending request.
+
+    Guarded on existing connections so it stays idempotent and never touches
+    tenants whose admins configured their own links.
+    """
+    if db.fetch_one("SELECT id FROM gitlab_connections WHERE tenant_id=%s", (tenant["id"],)):
+        return
+    log.info("seeding demo code repos")
+    from routers.coderepos import upsert_projects
+
+    conn = db.execute_returning(
+        """INSERT INTO gitlab_connections
+           (tenant_id, name, base_url, token_enc, account, mode, status, created_by)
+           VALUES (%s,%s,%s,%s,%s,'demo','active',%s) RETURNING *""",
+        (
+            tenant["id"], "公司 GitLab（演示）", "https://gitlab.demo.example.com",
+            encrypt_secret("demo-pat-not-real"), "demo-root", admin["id"],
+        ),
+    )
+    count = upsert_projects(conn, gitlab_client.demo_projects())
+    repos = {r["path"]: r for r in db.fetch_all(
+        "SELECT * FROM git_repos WHERE connection_id=%s", (conn["id"],)
+    )}
+    api_repo, web_repo = repos.get("innovatech/retail-api"), repos.get("innovatech/retail-web")
+    if api_repo:
+        db.execute(
+            """INSERT INTO repo_access_grants (tenant_id, repo_id, user_id, role, granted_by)
+               VALUES (%s,%s,%s,'developer',%s)
+               ON CONFLICT (repo_id, user_id) DO NOTHING""",
+            (tenant["id"], api_repo["id"], dev["id"], admin["id"]),
+        )
+    if web_repo:
+        db.execute(
+            """INSERT INTO repo_access_requests (tenant_id, repo_id, user_id, role, reason)
+               VALUES (%s,%s,%s,'developer','接入 Web 前端联调')""",
+            (tenant["id"], web_repo["id"], product["id"]),
+        )
+    events = [
+        ("repos.synced", {"connection": conn["name"], "count": count, "source": "demo"}, admin["name"]),
+        ("repo.access_requested", {"repo": "innovatech/retail-web", "role": "developer"}, product["name"]),
+        ("repo.access_granted", {"repo": "innovatech/retail-api", "role": "developer"}, admin["name"]),
+    ]
+    for type_, payload, actor in events:
+        db.execute(
+            """INSERT INTO activity_events
+               (tenant_id, actor_kind, actor_id, actor_user_id, type, payload)
+               VALUES (%s,'human',%s,%s,%s,%s)""",
+            (tenant["id"], actor, admin["id"], type_, Json(payload)),
+        )
 
 
 def _agent_for(tenant: dict, user: dict, role: dict, provider: str = "auto") -> dict:
@@ -278,3 +331,10 @@ def seed() -> None:
         log.info("demo tenant seeded")
     else:
         log.info("demo tenant already present")
+    # Keep the demo tenant feature-complete even when it predates a module
+    # (each block guards itself, so re-boots are no-ops).
+    tenant = db.fetch_one("SELECT * FROM tenants WHERE slug='innovatech'")
+    if tenant:
+        product = _user("product@transonce.local", "林小满", "demo123")
+        dev = _user("dev@transonce.local", "陈一鸣", "demo123")
+        _seed_coderepos(tenant, admin, product, dev)

@@ -2,7 +2,7 @@ import type { ElementType } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, FolderKanban, CalendarClock, FileText, ListChecks, TestTube2,
-  Package, Workflow, Rocket, Server, Activity, Bell, Bot, Users, LogOut,
+  Package, Workflow, Rocket, Server, Activity, Bell, Bot, Users, LogOut, GitBranch,
   Building2, ChevronDown, Menu, X, Moon, Sun, Sparkles, ArrowLeftRight, ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { MeetingIngest } from "./components/MeetingIngest";
 import { DevelopmentBoard } from "./components/DevelopmentBoard";
 import { TestingCenter } from "./components/TestingCenter";
 import { DeploymentCenter } from "./components/DeploymentCenter";
+import { CodeRepos } from "./views/CodeRepos";
 import { GlobalAIChat } from "./components/GlobalAIChat";
 import { Dashboard } from "./views/Dashboard";
 import { Projects } from "./views/Projects";
@@ -30,7 +31,7 @@ import { ErrorBoundary, formatDate } from "./components/common";
 
 type ViewId =
   | "dashboard" | "projects" | "meetings" | "requirements" | "development"
-  | "testing" | "artifacts" | "pipelines" | "deployment" | "environments"
+  | "testing" | "repos" | "artifacts" | "pipelines" | "deployment" | "environments"
   | "monitoring" | "alerts" | "agents" | "team";
 
 const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementType; perm: string }[] }[] = [
@@ -48,6 +49,7 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
   {
     group: "交付",
     items: [
+      { id: "repos", label: "代码管理", icon: GitBranch, perm: "repos" },
       { id: "artifacts", label: "制品管理", icon: Package, perm: "artifacts" },
       { id: "pipelines", label: "CI/CD 流水线", icon: Workflow, perm: "pipelines" },
       { id: "deployment", label: "部署管理", icon: Rocket, perm: "deployment" },
@@ -72,7 +74,7 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
 
 const TITLES: Record<ViewId, string> = {
   dashboard: "工作台", projects: "项目与系统", meetings: "会议纪要", requirements: "需求与设计",
-  development: "研发管理", testing: "测试管理", artifacts: "制品管理", pipelines: "CI/CD 流水线",
+  development: "研发管理", testing: "测试管理", repos: "代码管理", artifacts: "制品管理", pipelines: "CI/CD 流水线",
   deployment: "部署管理", environments: "环境配置", monitoring: "运维监控", alerts: "告警中心",
   agents: "我的 Agent", team: "团队管理",
 };
@@ -156,6 +158,7 @@ export default function App() {
       case "requirements": return <Requirements />;
       case "development": return <DevelopmentBoard />;
       case "testing": return <TestingCenter />;
+      case "repos": return <CodeRepos />;
       case "artifacts": return <Artifacts />;
       case "pipelines": return <Pipelines />;
       case "deployment": return <DeploymentCenter />;

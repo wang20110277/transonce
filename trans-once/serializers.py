@@ -180,6 +180,77 @@ def environment(r: dict, reveal: bool = False) -> dict:
     }
 
 
+def gitlab_connection(r: dict) -> dict:
+    return {
+        "id": _s(r["id"]),
+        "tenantId": _s(r.get("tenant_id")),
+        "name": r["name"],
+        "baseUrl": r.get("base_url"),
+        "mode": r.get("mode"),
+        "status": r.get("status"),
+        "account": r.get("account"),
+        "hasToken": bool(r.get("token_enc")),
+        "tokenMasked": mask_secret(decrypt_secret(r.get("token_enc"))),
+        "lastSyncAt": _iso(r.get("last_sync_at")),
+        "lastError": r.get("last_error"),
+        "repoCount": r.get("repo_count"),
+        "createdAt": _iso(r.get("created_at")),
+    }
+
+
+def git_repo(r: dict) -> dict:
+    return {
+        "id": _s(r["id"]),
+        "tenantId": _s(r.get("tenant_id")),
+        "connectionId": _s(r.get("connection_id")),
+        "connectionName": r.get("connection_name"),
+        "externalId": r.get("external_id"),
+        "path": r["path"],
+        "name": r["name"],
+        "namespace": r.get("namespace"),
+        "webUrl": r.get("web_url"),
+        "description": r.get("description"),
+        "defaultBranch": r.get("default_branch"),
+        "visibility": r.get("visibility"),
+        "archived": bool(r.get("archived")),
+        "lastActivityAt": _iso(r.get("last_activity_at")),
+        "fetchedAt": _iso(r.get("fetched_at")),
+    }
+
+
+def repo_access_grant(r: dict) -> dict:
+    return {
+        "id": _s(r["id"]),
+        "tenantId": _s(r.get("tenant_id")),
+        "repoId": _s(r.get("repo_id")),
+        "repoPath": r.get("repo_path"),
+        "userId": _s(r.get("user_id")),
+        "userName": r.get("user_name"),
+        "userEmail": r.get("user_email"),
+        "role": r["role"],
+        "grantedAt": _iso(r.get("granted_at")),
+    }
+
+
+def repo_access_request(r: dict) -> dict:
+    return {
+        "id": _s(r["id"]),
+        "tenantId": _s(r.get("tenant_id")),
+        "repoId": _s(r.get("repo_id")),
+        "repoPath": r.get("repo_path"),
+        "repoName": r.get("repo_name"),
+        "userId": _s(r.get("user_id")),
+        "userName": r.get("user_name"),
+        "userEmail": r.get("user_email"),
+        "role": r["role"],
+        "reason": r.get("reason"),
+        "status": r["status"],
+        "reviewNote": r.get("review_note"),
+        "reviewedAt": _iso(r.get("reviewed_at")),
+        "createdAt": _iso(r.get("created_at")),
+    }
+
+
 def meeting(r: dict) -> dict:
     return {
         "id": _s(r["id"]),

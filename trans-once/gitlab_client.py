@@ -1,0 +1,131 @@
+"""Minimal GitLab REST client for linked code repositories.
+
+Uses the standard library only (urllib) so the backend gains no dependency.
+Every call raises `GitlabError` with a human-readable message on network,
+auth or parse failures and returns plain dicts on success. `demo_projects()`
+backs the offline demo mode the same way mock_agent backs agent runs.
+"""
+from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+from config import GITLAB_TIMEOUT_SECONDS
+
+
+class GitlabError(RuntimeError):
+    """GitLab API call failed (network, auth or unexpected response)."""
+
+
+def normalize_base_url(url: str) -> str:
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        raise GitlabError("GitLab 地址不能为空")
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    if not urllib.parse.urlsplit(url).hostname:
+        raise GitlabError("GitLab 地址格式不正确")
+    return url
+
+
+def _request(base_url: str, token: str, path: str, params: dict | None = None) -> dict | list:
+    if not token:
+        raise GitlabError("未配置 GitLab 访问令牌")
+    query = ("?" + urllib.parse.urlencode(params)) if params else ""
+    req = urllib.request.Request(
+        f"{base_url}/api/v4{path}{query}",
+        headers={"PRIVATE-TOKEN": token, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=GITLAB_TIMEOUT_SECONDS) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise GitlabError("GitLab 拒绝了访问令牌（401），请检查令牌是否有效") from exc
+        if exc.code == 403:
+            raise GitlabError("GitLab 拒绝访问（403），令牌可能缺少 read_api 权限") from exc
+        raise GitlabError(f"GitLab 返回 HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise GitlabError(f"无法连接 GitLab：{exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GitlabError("GitLab 返回了无法解析的内容，请确认地址指向 GitLab 实例") from exc
+
+
+def fetch_current_user(base_url: str, token: str) -> dict:
+    """Validate credentials; returns the account behind the token."""
+    data = _request(base_url, token, "/user")
+    if not isinstance(data, dict) or "id" not in data:
+        raise GitlabError("GitLab /user 响应异常")
+    return data
+
+
+def _normalize_project(p: dict) -> dict:
+    namespace = ""
+    if isinstance(p.get("namespace"), dict):
+        namespace = p["namespace"].get("path") or ""
+    elif "/" in str(p.get("path_with_namespace") or ""):
+        namespace = p["path_with_namespace"].rsplit("/", 1)[0]
+    return {
+        "external_id": str(p.get("id")),
+        "path": p.get("path_with_namespace") or p.get("path") or "",
+        "name": p.get("name") or p.get("path") or "",
+        "namespace": namespace,
+        "web_url": p.get("web_url"),
+        "description": p.get("description"),
+        "default_branch": p.get("default_branch") or "main",
+        "visibility": p.get("visibility") or "private",
+        "archived": bool(p.get("archived")),
+        "last_activity_at": p.get("last_activity_at"),
+    }
+
+
+def fetch_projects(base_url: str, token: str, max_pages: int = 10) -> list[dict]:
+    """List every project the token can see (offset pagination, ≤100/page)."""
+    out: list[dict] = []
+    for page in range(1, max_pages + 1):
+        batch = _request(
+            base_url, token, "/projects",
+            {"membership": "true", "simple": "true", "order_by": "path",
+             "sort": "asc", "per_page": 100, "page": page},
+        )
+        if not isinstance(batch, list):
+            raise GitlabError("GitLab /projects 响应异常")
+        out.extend(_normalize_project(p) for p in batch if isinstance(p, dict))
+        if len(batch) < 100:
+            break
+    return out
+
+
+# Offline demo catalog: same shape as fetch_projects output, deterministic
+# external ids so repeated syncs upsert instead of duplicating.
+_DEMO_PROJECTS = [
+    ("innovatech/retail-web", "全渠道零售 Web 前端", "main", "private"),
+    ("innovatech/retail-api", "零售业务 API 服务", "main", "private"),
+    ("innovatech/retail-mobile", "移动端 App（React Native）", "develop", "private"),
+    ("innovatech/design-system", "设计系统与组件库", "main", "internal"),
+    ("platform/infra-terraform", "基础设施即代码", "master", "private"),
+    ("platform/ci-templates", "CI 模板与流水线脚本", "main", "internal"),
+]
+
+
+def demo_projects() -> list[dict]:
+    now = datetime.now(timezone.utc)
+    out = []
+    for i, (path, description, branch, visibility) in enumerate(_DEMO_PROJECTS):
+        namespace, name = path.rsplit("/", 1)
+        out.append({
+            "external_id": f"demo-{i + 1}",
+            "path": path,
+            "name": name,
+            "namespace": namespace,
+            "web_url": f"https://gitlab.demo.example.com/{path}",
+            "description": description,
+            "default_branch": branch,
+            "visibility": visibility,
+            "archived": False,
+            "last_activity_at": (now - timedelta(days=i, hours=3)).isoformat(),
+        })
+    return out

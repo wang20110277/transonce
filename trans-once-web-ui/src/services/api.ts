@@ -2,7 +2,8 @@ import type {
   Agent, Alert, Artifact, AuthUser, Conversation, Dashboard, Deployment, DevTask,
   Environment, JoinRequest, Meeting, Member, Monitor, Permission, Pipeline,
   PipelineRun, Project, Requirement, Role, System, Codebase, TenantDetail,
-  TenantSummary, TestRun, AgentRun, ActivityEvent,
+  TenantSummary, TestRun, AgentRun, ActivityEvent, GitlabConnection, GitRepo,
+  RepoAccessRequest, RepoAccessRole,
 } from "../types";
 
 const BASE = "/api";
@@ -228,6 +229,34 @@ export const api = {
     list: (tid: string) => get<Alert[]>(`${T(tid)}/alerts`),
     update: (tid: string, aid: string, status: Alert["status"]) =>
       patch<Alert>(`${T(tid)}/alerts/${aid}`, { status }),
+  },
+
+  coderepos: {
+    connections: (tid: string) => get<GitlabConnection[]>(`${T(tid)}/gitlab/connections`),
+    createConnection: (tid: string, body: { name: string; baseUrl: string; token?: string; mode: "live" | "demo" }) =>
+      post<GitlabConnection>(`${T(tid)}/gitlab/connections`, body),
+    updateConnection: (tid: string, cid: string, body: Partial<{ name: string; baseUrl: string; token: string; mode: "live" | "demo" }>) =>
+      patch<GitlabConnection>(`${T(tid)}/gitlab/connections/${cid}`, body),
+    removeConnection: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/gitlab/connections/${cid}`),
+    syncConnection: (tid: string, cid: string) =>
+      post<{ ok: boolean; count: number; source: string; connection: GitlabConnection }>(`${T(tid)}/gitlab/connections/${cid}/sync`),
+
+    repos: (tid: string, q?: string, connectionId?: string) =>
+      get<GitRepo[]>(`${T(tid)}/repos${q || connectionId ? `?${[
+        q ? `q=${encodeURIComponent(q)}` : "", connectionId ? `connection_id=${connectionId}` : "",
+      ].filter(Boolean).join("&")}` : ""}`),
+    repo: (tid: string, rid: string) => get<GitRepo>(`${T(tid)}/repos/${rid}`),
+
+    myRequests: (tid: string) => get<RepoAccessRequest[]>(`${T(tid)}/repo-access-requests/mine`),
+    requests: (tid: string) => get<RepoAccessRequest[]>(`${T(tid)}/repo-access-requests`),
+    requestAccess: (tid: string, rid: string, body: { role: RepoAccessRole; reason?: string }) =>
+      post<RepoAccessRequest>(`${T(tid)}/repos/${rid}/access-requests`, body),
+    approve: (tid: string, requestId: string, body?: { role?: RepoAccessRole; note?: string }) =>
+      post<RepoAccessRequest>(`${T(tid)}/repo-access-requests/${requestId}/approve`, body),
+    reject: (tid: string, requestId: string, note?: string) =>
+      post<RepoAccessRequest>(`${T(tid)}/repo-access-requests/${requestId}/reject`, { note }),
+    revoke: (tid: string, rid: string, userId: string) =>
+      del<{ ok: true }>(`${T(tid)}/repos/${rid}/access/${userId}`),
   },
 
   chat: {

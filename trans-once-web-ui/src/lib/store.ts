@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type {
   Alert, Artifact, Dashboard, Deployment, DevTask, Environment, Meeting, Monitor,
   Pipeline, PipelineRun, Project, Requirement, TestRun, AgentRun, ActivityEvent,
-  TenantDetail,
+  TenantDetail, GitlabConnection, GitRepo, RepoAccessRequest,
 } from "../types";
 import { api } from "../services/api";
 
@@ -18,6 +18,10 @@ export type WorkspaceState = {
   tasks: DevTask[];
   testRuns: TestRun[];
   artifacts: Artifact[];
+  connections: GitlabConnection[];
+  repos: GitRepo[];
+  myRepoRequests: RepoAccessRequest[];
+  repoRequests: RepoAccessRequest[];
   pipelines: Pipeline[];
   pipelineRuns: PipelineRun[];
   deployments: Deployment[];
@@ -40,6 +44,10 @@ const initial: WorkspaceState = {
   tasks: [],
   testRuns: [],
   artifacts: [],
+  connections: [],
+  repos: [],
+  myRepoRequests: [],
+  repoRequests: [],
   pipelines: [],
   pipelineRuns: [],
   deployments: [],
@@ -89,7 +97,8 @@ export async function loadWorkspace(tenantId: string, force = false): Promise<vo
   inflight = (async () => {
     const [
       detail, dashboard, projects, meetings, requirements, tasks, testRuns,
-      artifacts, pipelines, pipelineRuns, deployments, environments, monitors,
+      artifacts, connections, repos, myRepoRequests, repoRequests,
+      pipelines, pipelineRuns, deployments, environments, monitors,
       alerts, agentRuns, activity,
     ] = await Promise.all([
       safe(api.tenants.detail(tenantId), null),
@@ -100,6 +109,10 @@ export async function loadWorkspace(tenantId: string, force = false): Promise<vo
       safe(api.tasks.list(tenantId), []),
       safe(api.testRuns.list(tenantId), []),
       safe(api.artifacts.list(tenantId), []),
+      safe(api.coderepos.connections(tenantId), []),
+      safe(api.coderepos.repos(tenantId), []),
+      safe(api.coderepos.myRequests(tenantId), []),
+      safe(api.coderepos.requests(tenantId), []),
       safe(api.pipelines.list(tenantId), []),
       safe(api.pipelines.runs(tenantId), []),
       safe(api.deployments.list(tenantId), []),
@@ -112,7 +125,8 @@ export async function loadWorkspace(tenantId: string, force = false): Promise<vo
     set({
       tenantId, loading: false,
       detail, dashboard, projects, meetings, requirements, tasks, testRuns,
-      artifacts, pipelines, pipelineRuns, deployments, environments, monitors,
+      artifacts, connections, repos, myRepoRequests, repoRequests,
+      pipelines, pipelineRuns, deployments, environments, monitors,
       alerts, agentRuns, activity,
       error: detail ? null : "加载工作空间失败或没有访问权限",
     });

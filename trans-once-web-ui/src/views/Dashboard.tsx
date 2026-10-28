@@ -1,6 +1,6 @@
 import {
   CalendarClock, FileText, ListChecks, TestTube2, Package, Workflow,
-  Rocket, Activity, Bell, Bot, ArrowRight, Server, Users, GitBranch,
+  Rocket, Activity, Bell, Bot, ArrowRight, Server, Users, GitBranch, FolderGit2,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,12 +54,13 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: string) => void }) {
               </div>
               {can("pipelines") && <Button variant="ghost" size="sm" onClick={() => onNavigate("pipelines")}>流水线 <ArrowRight className="w-3.5 h-3.5 ml-1" /></Button>}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-9 gap-2">
               {[
                 { label: "会议", value: c?.meetings ?? 0, icon: CalendarClock, view: "meetings", perm: "meetings" },
                 { label: "需求", value: c?.requirements ?? 0, icon: FileText, view: "requirements", perm: "requirements" },
                 { label: "任务", value: c?.tasks ?? 0, icon: ListChecks, view: "development", perm: "development" },
                 { label: "测试", value: c?.testRuns ?? 0, icon: TestTube2, view: "testing", perm: "testing" },
+                { label: "代码库", value: c?.repos ?? 0, icon: FolderGit2, view: "repos", perm: "repos" },
                 { label: "制品", value: c?.artifacts ?? 0, icon: Package, view: "artifacts", perm: "artifacts" },
                 { label: "流水线", value: c?.pipelines ?? 0, icon: GitBranch, view: "pipelines", perm: "pipelines" },
                 { label: "部署", value: c?.deployments ?? 0, icon: Rocket, view: "deployment", perm: "deployment" },

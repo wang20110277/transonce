@@ -323,6 +323,82 @@ export type Environment = {
   createdAt: string;
 };
 
+// --- 代码管理：GitLab 连接、代码库与权限申请 ---
+
+export type RepoAccessRole = "guest" | "reporter" | "developer" | "maintainer";
+
+export const REPO_ROLE_LABELS: Record<RepoAccessRole, string> = {
+  guest: "访客",
+  reporter: "报告者",
+  developer: "开发者",
+  maintainer: "管理员",
+};
+
+export type GitlabConnection = {
+  id: string;
+  tenantId?: string;
+  name: string;
+  baseUrl?: string | null;
+  mode: "live" | "demo";
+  status: "active" | "error";
+  account?: string | null;
+  hasToken?: boolean;
+  tokenMasked?: string | null;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  repoCount?: number | null;
+  createdAt?: string;
+};
+
+export type GitRepo = {
+  id: string;
+  tenantId?: string;
+  connectionId: string;
+  connectionName?: string | null;
+  externalId?: string | null;
+  path: string;
+  name: string;
+  namespace?: string | null;
+  webUrl?: string | null;
+  description?: string | null;
+  defaultBranch?: string | null;
+  visibility?: string | null;
+  archived?: boolean;
+  lastActivityAt?: string | null;
+  fetchedAt?: string | null;
+  myAccess?: { role: RepoAccessRole; grantedAt?: string | null } | null;
+  myRequest?: { id: string; role: RepoAccessRole; status: string } | null;
+  members?: RepoAccessGrant[];
+};
+
+export type RepoAccessGrant = {
+  id: string;
+  repoId?: string;
+  repoPath?: string | null;
+  userId: string;
+  userName?: string | null;
+  userEmail?: string | null;
+  role: RepoAccessRole;
+  grantedAt?: string | null;
+};
+
+export type RepoAccessRequest = {
+  id: string;
+  tenantId?: string;
+  repoId: string;
+  repoPath?: string | null;
+  repoName?: string | null;
+  userId: string;
+  userName?: string | null;
+  userEmail?: string | null;
+  role: RepoAccessRole;
+  reason?: string | null;
+  status: "pending" | "approved" | "rejected";
+  reviewNote?: string | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+};
+
 export type Deployment = {
   id: string;
   tenantId?: string;
@@ -376,6 +452,7 @@ export type Dashboard = {
     tasks: number;
     testRuns: number;
     artifacts: number;
+    repos?: number;
     pipelines: number;
     deployments: number;
     environments: number;

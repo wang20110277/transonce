@@ -31,6 +31,8 @@ AGENT_AGENTIC_TIMEOUT_MS = int(os.getenv("AGENT_AGENTIC_TIMEOUT_MS", "600000"))
 # local agent run works. The per-run workspace and env whitelist below remain
 # the containment boundary.
 AGENT_AGENTIC_DISALLOWED_TOOLS = os.getenv("AGENT_AGENTIC_DISALLOWED_TOOLS", "")
+# Outbound GitLab API timeout for live connections (demo mode never calls out).
+GITLAB_TIMEOUT_SECONDS = int(os.getenv("GITLAB_TIMEOUT_SECONDS", "15"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_NAME = os.getenv("ADMIN_NAME", "超级管理员")
@@ -56,6 +58,7 @@ PERMISSIONS = [
     {"id": "design", "label": "原型与架构", "group": "菜单"},
     {"id": "development", "label": "研发管理", "group": "菜单"},
     {"id": "testing", "label": "测试管理", "group": "菜单"},
+    {"id": "repos", "label": "代码管理", "group": "菜单"},
     {"id": "artifacts", "label": "制品管理", "group": "菜单"},
     {"id": "pipelines", "label": "CI/CD 流水线", "group": "菜单"},
     {"id": "deployment", "label": "部署管理", "group": "菜单"},
@@ -72,10 +75,22 @@ PERMISSIONS = [
     {"id": "secret.read", "label": "查看环境密钥", "group": "敏感操作"},
     {"id": "deploy.production", "label": "生产环境部署", "group": "敏感操作"},
     {"id": "monitor.manage", "label": "监控与告警维护", "group": "敏感操作"},
+    {"id": "repo.manage", "label": "代码库连接管理（GitLab）", "group": "敏感操作"},
+    {"id": "repo.approve", "label": "审批代码库权限", "group": "敏感操作"},
 ]
 
 MENU_PERMISSIONS = [p["id"] for p in PERMISSIONS if p["group"] == "菜单"]
 ALL_PERMISSIONS = [p["id"] for p in PERMISSIONS]
+
+# Per-repo access roles mirror GitLab permission levels (guest..maintainer;
+# owner stays instance-side and is not requestable through the platform).
+REPO_ROLES = [
+    {"id": "guest", "label": "访客", "level": 10},
+    {"id": "reporter", "label": "报告者", "level": 20},
+    {"id": "developer", "label": "开发者", "level": 30},
+    {"id": "maintainer", "label": "管理员", "level": 40},
+]
+DEFAULT_REPO_ROLE = "developer"
 
 ROLE_PRESETS = [
     {
@@ -88,7 +103,7 @@ ROLE_PRESETS = [
         "description": "会议、需求、原型架构与研发协作",
         "permissions": [
             "dashboard", "projects", "meetings", "requirements", "design",
-            "development", "testing", "artifacts", "agents",
+            "development", "testing", "repos", "artifacts", "agents",
         ],
     },
     {
@@ -96,23 +111,23 @@ ROLE_PRESETS = [
         "description": "需求、设计、编码、测试与流水线执行",
         "permissions": [
             "dashboard", "projects", "meetings", "requirements", "design",
-            "development", "testing", "artifacts", "pipelines", "agents",
+            "development", "testing", "repos", "artifacts", "pipelines", "agents",
         ],
     },
     {
         "name": "测试工程师",
         "description": "需求验收、测试用例与测试执行",
         "permissions": [
-            "dashboard", "requirements", "design", "testing", "artifacts", "agents",
+            "dashboard", "requirements", "design", "testing", "repos", "artifacts", "agents",
         ],
     },
     {
         "name": "DevOps 工程师",
         "description": "流水线、制品、环境、部署与监控告警",
         "permissions": [
-            "dashboard", "artifacts", "pipelines", "deployment", "environments",
+            "dashboard", "repos", "artifacts", "pipelines", "deployment", "environments",
             "monitoring", "alerts", "agents", "env.manage", "secret.read",
-            "deploy.production", "monitor.manage",
+            "deploy.production", "monitor.manage", "repo.manage", "repo.approve",
         ],
     },
     {

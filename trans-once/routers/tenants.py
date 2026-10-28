@@ -618,6 +618,7 @@ def dashboard(tenant_id: str, user: dict = Depends(get_current_user)):
             "tasks": count("dev_tasks"),
             "testRuns": count("test_runs"),
             "artifacts": count("artifacts"),
+            "repos": count("git_repos"),
             "pipelines": count("pipelines"),
             "deployments": count("deployments"),
             "environments": count("environments"),

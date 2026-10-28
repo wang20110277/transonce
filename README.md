@@ -17,6 +17,7 @@
 - **个人 Agent**：成员加入租户后自动获得专属 Agent，在统一对话框中以本人权限执行需求设计、拆解、编码、测试、部署与巡检。
 - **人工闸门**：环境 IP/密码由人工维护并加密存储；查看明文密钥需要 `secret.read`；生产发布需要 `deploy.production`。
 - **完整交付链**：会议提取、原型/架构 JSON、任务看板、Agent 运行记录、制品文件、流水线阶段与日志、部署记录、健康检查与告警。
+- **代码管理**：租户可关联 GitLab（真实 API 同步或离线演示目录），成员浏览全部代码库，按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计。
 - **可离线演示**：默认 `AGENT_PROVIDER=mock`，无需外部模型账号即可跑通全部动作；可切换 `claude` / `opencode`。
 
 ## 技术栈
@@ -37,7 +38,7 @@
 trans-once-web-ui/
   components/ui/          # shadcn 基础组件（alias @ 指向 trans-once-web-ui/）
   src/App.tsx             # 登录门禁、租户门禁、权限菜单、页面路由
-  src/views/              # 工作台、项目、需求、制品、流水线、环境、监控、告警、我的 Agent
+  src/views/              # 工作台、项目、需求、代码管理、制品、流水线、环境、监控、告警、我的 Agent
   src/components/         # 登录、租户选择、团队管理、会议、研发、测试、部署、Agent 对话
   src/lib/session.ts      # 认证 / 当前租户 / 权限判断
   src/lib/store.ts        # 租户工作区数据加载与刷新、askAgent 事件
@@ -49,7 +50,8 @@ trans-once/
   orchestration.py        # Agent 动作、autopilot、部署闸门、聊天意图路由
   agents.py               # Provider 解析与 CLI 调用 / mock 回退
   mock_agent.py           # 离线确定性 Agent 产出
-  routers/                # auth / tenants / projects / pipeline / devops / agentchat
+  routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat
+  gitlab_client.py        # GitLab REST 客户端（stdlib urllib）与演示目录生成
   migrations/versions/    # 0001 初始链路，0002 多租户 + RBAC + Agent + 全量平台表
   seed.py                 # 幂等演示数据
   tests/smoke.py          # 端到端冒烟测试（stdlib）
@@ -119,7 +121,7 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 |---|---|---|---|
 | `admin@transonce.local` | `admin123` | 超级管理员 / 租户管理员 | 全部页面、全部租户 |
 | `product@transonce.local` | `demo123` | 产品负责人 | 工作台、项目、会议、需求、研发、测试、制品、我的 Agent |
-| `dev@transonce.local` | `demo123` | 研发工程师 | 在工作台/需求/测试/制品基础上增加 CI/CD，不含环境、部署、监控、告警、团队 |
+| `dev@transonce.local` | `demo123` | 研发工程师 | 在工作台/需求/测试/制品基础上增加代码管理与 CI/CD，不含环境、部署、监控、告警、团队 |
 
 也可以用注册页创建新账号，然后在「团队选择」中搜索租户并提交加入申请，由租户管理员审批。
 
@@ -127,8 +129,8 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 
 权限分为两组：
 
-- **菜单权限**：`dashboard`、`projects`、`meetings`、`requirements`、`design`、`development`、`testing`、`artifacts`、`pipelines`、`deployment`、`environments`、`monitoring`、`alerts`、`agents`、`team`
-- **敏感操作**：`member.manage`、`role.manage`、`agent.manage`、`env.manage`、`secret.read`、`deploy.production`、`monitor.manage`
+- **菜单权限**：`dashboard`、`projects`、`meetings`、`requirements`、`design`、`development`、`testing`、`repos`、`artifacts`、`pipelines`、`deployment`、`environments`、`monitoring`、`alerts`、`agents`、`team`
+- **敏感操作**：`member.manage`、`role.manage`、`agent.manage`、`env.manage`、`secret.read`、`deploy.production`、`monitor.manage`、`repo.manage`（关联/同步 GitLab）、`repo.approve`（审批代码库权限）
 
 执行规则：
 
@@ -136,6 +138,7 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 - 普通成员只看到角色包含的菜单；后端每个路由通过 `load_tenant_context(user, tenant_id, permission)` 再次校验，不能靠隐藏菜单绕过。
 - 环境接口只返回掩码；`POST /environments/{id}/reveal` 需要 `secret.read` 并写入审计日志。
 - 发布到 `production` 环境时，`orchestration.deploy_artifact` 强制要求 `deploy.production`，否则返回 403。
+- GitLab 访问令牌加密落库、接口只返回掩码；关联/同步连接需要 `repo.manage`，审批权限申请需要 `repo.approve`。
 - 所有写操作与 Agent 动作写入 `activity_events`，工作台按租户展示时间线。
 
 ## Agent 配置
@@ -173,7 +176,7 @@ npm run lint
 npm run build
 ```
 
-`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录，共 39 项检查，且不会创建或删除业务实体。
+`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录，共 50 项检查，且不会创建或删除业务实体。
 
 ## 主要 API
 
@@ -187,6 +190,7 @@ npm run build
 | 会议/需求 | `/meetings`、`/meetings/{id}/extract`、`/requirements`、`/requirements/{id}/design|breakdown|code|test|autopilot` |
 | 任务/测试 | `/tasks`、`/tasks/{id}/run`、`/test-runs`、`/agent-runs` |
 | 制品/流水线 | `/artifacts`、`/artifacts/{id}/release`、`/pipelines`、`/pipelines/{id}/run` |
+| 代码管理 | `/gitlab/connections`、`/gitlab/connections/{id}/sync`、`/repos`、`/repos/{id}/access-requests`、`/repo-access-requests` |
 | 环境/部署 | `/environments`、`/environments/{id}/reveal`、`/deployments` |
 | 监控/告警 | `/monitors`、`/monitors/{id}/check`、`/monitors/check-all`、`/alerts` |
 | Agent 对话 | `/conversations`、`/conversations/{id}/messages`、`POST /chat` |
@@ -195,6 +199,6 @@ npm run build
 
 ## 当前阶段
 
-已完成：多租户与 RBAC、个人 Agent、会议提取、需求设计与拆解、任务执行、代码/测试/制品、流水线、部署闸门、环境密钥、监控告警、审计时间线、前端全量接入真实 API。
+已完成：多租户与 RBAC、个人 Agent、会议提取、需求设计与拆解、任务执行、代码/测试/制品、流水线、部署闸门、环境密钥、监控告警、审计时间线、GitLab 代码管理与权限申请审批、前端全量接入真实 API。
 
-后续可扩展：真实 Git/CI 执行器、WebSocket 流式 Agent 输出、对象存储制品包、KMS/Vault、租户级配额与账单、生产发布审批流（当前为权限闸门 + 人工操作）。
+后续可扩展：GitLab 权限代发（审批通过后以令牌调用 Members API 直接开通）、真实 Git/CI 执行器、WebSocket 流式 Agent 输出、对象存储制品包、KMS/Vault、租户级配额与账单、生产发布审批流（当前为权限闸门 + 人工操作）。
