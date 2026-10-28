@@ -1,13 +1,23 @@
 <!doctype html>
-<!-- 把 favicon.svg 原样铺满 1024×1024 画布，供 capturePage 截成应用图标底图 -->
+<!-- 图标底图：1024 画布，透明背景；内容方块占 ~82%（macOS 图标栅格规范，
+     Dock 中与系统图标大小一致），四角圆角接近系统 squircle，四周留透明边。 -->
 <meta charset="utf-8">
 <style>
   html, body { margin: 0; padding: 0; width: 1024px; height: 1024px; overflow: hidden; background: transparent; }
   svg { width: 1024px; height: 1024px; display: block; }
 </style>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="15" fill="#18181b"/>
-  <g transform="translate(14 14) scale(1.5)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3f3f46"/>
+      <stop offset="1" stop-color="#18181b"/>
+    </linearGradient>
+  </defs>
+  <!-- 深色渐变圆角方块：824×824 居中（透明边距约 10%），与深色 Dock 有层次分离 -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="6"/>
+  <!-- 白色火箭（与 favicon 同款 lucide 路径），笔画加粗保证小尺寸可辨 -->
+  <g transform="translate(232 244) scale(23.3)" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
     <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/>
     <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>
     <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/>

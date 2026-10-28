@@ -7,6 +7,8 @@ const path = require('node:path');
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
     width: 1024, height: 1024, show: false, frame: false, resizable: false, useContentSize: true,
+    // 截图必须保留透明通道：白色圆角边在 Dock 里非常显眼。
+    transparent: true, backgroundColor: '#00000000',
   });
   await win.loadURL('file://' + path.join(__dirname, 'render-icon.html'));
   await new Promise((resolve) => setTimeout(resolve, 500));
