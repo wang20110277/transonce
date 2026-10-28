@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader, EmptyState, StatusPill, Pill, Select, Textarea, timeAgo, statusLabel } from "../components/common";
 import { api } from "../services/api";
+import { MODEL_SUGGESTIONS, modelPlaceholder } from "../lib/agentModels";
 import { can, isAdmin, useSession } from "../lib/session";
 import { askAgent, refreshWorkspace, useWorkspace } from "../lib/store";
 
@@ -160,7 +161,10 @@ export function MyAgent() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">模型（可选）</label>
-              <Input value={current.model} disabled={!editable} onChange={(e) => setForm({ ...current, model: e.target.value })} className="mt-1" placeholder="默认" />
+              <Input value={current.model} disabled={!editable} onChange={(e) => setForm({ ...current, model: e.target.value })} className="mt-1" list="agent-model-options" placeholder={modelPlaceholder(current.provider)} />
+              <datalist id="agent-model-options">
+                {(MODEL_SUGGESTIONS[current.provider] ?? []).map((m) => <option key={m} value={m} />)}
+              </datalist>
             </div>
           </div>
           <div>

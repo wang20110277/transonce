@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { Agent, Permission, Role } from "../types";
 import { api } from "../services/api";
+import { MODEL_SUGGESTIONS, modelPlaceholder } from "../lib/agentModels";
 import { can, isAdmin, useSession } from "../lib/session";
 import { refreshWorkspace, useWorkspace } from "../lib/store";
 import { Modal } from "./TeamSelect";
@@ -465,7 +466,10 @@ function AgentModal({ agent, busy, onClose, onSave }: {
         </div>
         <div>
           <label className="text-sm font-medium">模型（可选）</label>
-          <Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className="mt-1.5" placeholder="例如 claude-sonnet-4-5" />
+          <Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className="mt-1.5" list="agent-model-options" placeholder={modelPlaceholder(form.provider)} />
+          <datalist id="agent-model-options">
+            {(MODEL_SUGGESTIONS[form.provider] ?? []).map((m) => <option key={m} value={m} />)}
+          </datalist>
         </div>
         <div>
           <label className="text-sm font-medium">描述</label>

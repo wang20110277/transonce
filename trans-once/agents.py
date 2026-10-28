@@ -120,6 +120,7 @@ def run_agent_text(
     provider: str | None = None,
     agentic: bool | None = None,
     json_only: bool = True,
+    model: str | None = None,
 ) -> str:
     p = get_provider(provider)
     if p == "mock":
@@ -143,6 +144,8 @@ def run_agent_text(
     if p == "claude":
         # Prompt goes over stdin: avoids argv limits and keeps notes out of `ps`.
         args = ["--print", "--output-format", "text"]
+        if model:
+            args += ["--model", model]
         if disallowed:
             args += ["--disallowedTools", disallowed]
         if mode:
@@ -152,7 +155,7 @@ def run_agent_text(
         stdin_text: str | None = combined
     else:
         # `opencode run` takes the message as argv; length is capped above.
-        args = ["run", combined]
+        args = ["run"] + (["--model", model] if model else []) + [combined]
         stdin_text = None
     timeout = timeout_ms / 1000
     proc = subprocess.Popen(
@@ -179,11 +182,12 @@ def run_agent_text(
     return stdout
 
 
-def runtime_info() -> dict:
-    """Cheap snapshot for run records: which provider and execution mode a run
-    would use right now."""
+def runtime_info(provider: str | None = None, model: str | None = None) -> dict:
+    """Cheap snapshot for run records: which provider/model and execution mode
+    a run would use right now."""
     return {
-        "provider": get_provider(),
+        "provider": get_provider(provider),
+        "model": model or "",
         "mode": "agentic" if _resolve_agentic(None) else "text",
     }
 
@@ -207,12 +211,12 @@ def parse_agent_json(text: str):
         return None
 
 
-def _run_json(system: str, user: str, provider: str | None):
+def _run_json(system: str, user: str, provider: str | None, model: str | None = None):
     p = get_provider(provider)
     if p == "mock":
         return None
     try:
-        parsed = parse_agent_json(run_agent_text(system, user, p))
+        parsed = parse_agent_json(run_agent_text(system, user, p, model=model))
         return parsed
     except Exception:
         if AGENT_FALLBACK_MOCK:
@@ -226,20 +230,21 @@ def _prompt(role: str, extra: str = "") -> str:
 
 # --- pipeline stages -----------------------------------------------------
 
-def extract_requirements(title: str, notes: str, provider: str | None = None) -> list:
+def extract_requirements(title: str, notes: str, provider: str | None = None, model: str | None = None) -> list:
     system = _prompt(
         "extractor",
         "识别每个独立的产品需求。为每个需求生成 title、description、priority(low/medium/high)、"
         "acceptanceCriteria(数组)。忽略过程性讨论。输出 JSON 数组 [{...}]。",
     )
-    result = _run_json(system, f"会议标题：{title}\n\n会议纪要：\n{notes}", provider)
+    result = _run_json(system, f"会议标题：{title}\n\n会议纪要：\n{notes}", provider, model)
     if isinstance(result, list) and result:
         return result
     return mock_agent.extract_requirements(title, notes)
 
 
 def design_requirement(
-    title: str, description: str, acceptance_criteria: list, provider: str | None = None
+    title: str, description: str, acceptance_criteria: list, provider: str | None = None,
+    model: str | None = None,
 ) -> dict:
     ac = "\n".join(f"- {c}" for c in acceptance_criteria) or "-（无）"
     system = _prompt(
@@ -248,14 +253,15 @@ def design_requirement(
         "architecture:{style,components:[{name,responsibility,tech}],dataModel:[{table,fields[]}],"
         "apis:[{method,path,purpose}],deployment,risks:[...],diagram}}。diagram 使用 mermaid flowchart。",
     )
-    result = _run_json(system, f"需求标题：{title}\n描述：{description or '（无）'}\n验收标准：\n{ac}", provider)
+    result = _run_json(system, f"需求标题：{title}\n描述：{description or '（无）'}\n验收标准：\n{ac}", provider, model)
     if isinstance(result, dict) and result.get("architecture"):
         return result
     return mock_agent.design_requirement(title, description, acceptance_criteria)
 
 
 def breakdown_requirement(
-    title: str, description: str, acceptance_criteria: list, provider: str | None = None
+    title: str, description: str, acceptance_criteria: list, provider: str | None = None,
+    model: str | None = None,
 ) -> list:
     ac = "\n".join(f"- {c}" for c in acceptance_criteria) or "-（无）"
     system = _prompt(
@@ -264,14 +270,15 @@ def breakdown_requirement(
         "每项含 title、description、estimate、acceptanceCriteria(数组)、"
         "suggestedAssignee(human|agent)。输出 JSON 数组 [{...}]。",
     )
-    result = _run_json(system, f"需求标题：{title}\n描述：{description or '（无）'}\n验收标准：\n{ac}", provider)
+    result = _run_json(system, f"需求标题：{title}\n描述：{description or '（无）'}\n验收标准：\n{ac}", provider, model)
     if isinstance(result, list) and result:
         return result
     return mock_agent.breakdown_requirement(title, description, acceptance_criteria)
 
 
 def generate_code(
-    title: str, description: str, tasks: list | None = None, provider: str | None = None
+    title: str, description: str, tasks: list | None = None, provider: str | None = None,
+    model: str | None = None,
 ) -> dict:
     system = _prompt(
         "coder",
@@ -279,14 +286,15 @@ def generate_code(
         "至少包含入口文件、单元测试、Dockerfile 与 CI 工作流；代码必须完整可运行。",
     )
     task_titles = "\n".join(f"- {t.get('title', '')}" for t in (tasks or []))
-    result = _run_json(system, f"需求：{title}\n描述：{description or ''}\n任务：\n{task_titles}", provider)
+    result = _run_json(system, f"需求：{title}\n描述：{description or ''}\n任务：\n{task_titles}", provider, model)
     if isinstance(result, dict) and result.get("files"):
         return result
     return mock_agent.generate_code(title, description, tasks or [])
 
 
 def generate_test_cases(
-    title: str, description: str, acceptance_criteria: list, provider: str | None = None
+    title: str, description: str, acceptance_criteria: list, provider: str | None = None,
+    model: str | None = None,
 ) -> list:
     ac = "\n".join(f"- {c}" for c in acceptance_criteria) or "-（无）"
     system = _prompt(
@@ -294,19 +302,19 @@ def generate_test_cases(
         "覆盖 unit/integration/e2e 三层；优先覆盖验收标准与边界、异常、越权。"
         "每个用例含 title、type(unit|integration|e2e)、steps(数组)、expectedResult。输出 JSON 数组。",
     )
-    result = _run_json(system, f"需求标题：{title}\n描述：{description or ''}\n验收标准：\n{ac}", provider)
+    result = _run_json(system, f"需求标题：{title}\n描述：{description or ''}\n验收标准：\n{ac}", provider, model)
     if isinstance(result, list) and result:
         return result
     return mock_agent.generate_test_cases(title, description, acceptance_criteria)
 
 
-def generate_deployment_plan(title: str, description: str, provider: str | None = None) -> dict:
+def generate_deployment_plan(title: str, description: str, provider: str | None = None, model: str | None = None) -> dict:
     system = _prompt(
         "deployer",
         "stages 覆盖依赖安装→静态检查→构建→测试→制品→部署，每步给出可执行 command；"
         "environments 为目标环境数组；notes 为环境变量、密钥与回滚注意事项。输出单个 JSON 对象。",
     )
-    result = _run_json(system, f"需求/制品：{title}\n描述：{description or ''}", provider)
+    result = _run_json(system, f"需求/制品：{title}\n描述：{description or ''}", provider, model)
     if isinstance(result, dict) and result.get("stages"):
         return result
     return mock_agent.generate_deployment_plan(title, description)
@@ -328,6 +336,7 @@ def chat_reply(
             f"对话历史：\n{hist}\n\n用户：{message}",
             p,
             json_only=False,
+            model=agent.get("model") or None,
         )
         return text.strip()[:4000]
     except Exception as e:

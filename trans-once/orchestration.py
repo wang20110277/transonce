@@ -107,7 +107,8 @@ def start_run(ctx: TenantContext, task_type: str, input_text: str, agent_id: str
             input_text[:20000],
             Json([{
                 "at": _now(),
-                "message": f"{task_type} 开始执行（provider={agents.runtime_info()['provider']}，"
+                "message": f"{task_type} 开始执行（provider={agents.runtime_info((agent or {}).get('provider'), (agent or {}).get('model'))['provider']}，"
+                           f"model={(agent or {}).get('model') or '默认'}，"
                            f"mode={agents.runtime_info()['mode']}）",
             }]),
             ctx.user["id"],
@@ -141,6 +142,7 @@ def design_requirement(ctx: TenantContext, req: dict, force: bool = False) -> di
         result = agents.design_requirement(
             req["title"], req.get("description") or "",
             req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
+            (started["agent"] or {}).get("model") or None,
         )
         updated = db.execute_returning(
             """UPDATE requirements SET prototype=%s, architecture=%s, design_status='designed'
@@ -170,6 +172,7 @@ def breakdown_requirement(ctx: TenantContext, req: dict, force: bool = False) ->
         drafts = agents.breakdown_requirement(
             req["title"], req.get("description") or "",
             req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
+            (started["agent"] or {}).get("model") or None,
         )
         if existing:
             db.execute("DELETE FROM dev_tasks WHERE requirement_id = %s", (req["id"],))
@@ -214,6 +217,7 @@ def code_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
         result = agents.generate_code(
             req["title"], req.get("description") or "", tasks,
             (started["agent"] or {}).get("provider"),
+            (started["agent"] or {}).get("model") or None,
         )
         version = result.get("version") or "v0.1.0"
         name = result.get("artifactName") or f"{req['title']}-bundle"
@@ -260,6 +264,7 @@ def test_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
         cases = agents.generate_test_cases(
             req["title"], req.get("description") or "",
             req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
+            (started["agent"] or {}).get("model") or None,
         )
         # No test executor is wired yet: cases are generated, not executed.
         run_cases = [
@@ -298,7 +303,10 @@ def ensure_pipeline(ctx: TenantContext, req: dict, agent: dict | None) -> dict:
     )
     if existing:
         return existing
-    plan = agents.generate_deployment_plan(req["title"], req.get("description") or "", (agent or {}).get("provider"))
+    plan = agents.generate_deployment_plan(
+        req["title"], req.get("description") or "",
+        (agent or {}).get("provider"), (agent or {}).get("model") or None,
+    )
     return db.execute_returning(
         """INSERT INTO pipelines (tenant_id, name, description, stages, trigger, created_by)
            VALUES (%s, %s, %s, %s, 'manual', %s) RETURNING *""",
@@ -762,7 +770,10 @@ def handle_chat(
             if not meeting:
                 reply = "我还没有可用的会议纪要。请先在「会议纪要」录入或粘贴内容，我就能立即提取需求。"
             else:
-                drafts = agents.extract_requirements(meeting["title"], meeting["raw_notes"] or "", agent.get("provider"))
+                drafts = agents.extract_requirements(
+                    meeting["title"], meeting["raw_notes"] or "",
+                    agent.get("provider"), agent.get("model") or None,
+                )
                 created = []
                 for d in drafts:
                     row = db.execute_returning(
