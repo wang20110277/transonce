@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import type { Agent, Permission, Role } from "../types";
 import { api } from "../services/api";
-import { MODEL_SUGGESTIONS, modelPlaceholder } from "../lib/agentModels";
+import { RUNTIME_OPTIONS, useAgentRuntime, runtimeHint, modelPlaceholder } from "../lib/agentModels";
 import { can, isAdmin, useSession } from "../lib/session";
 import { refreshWorkspace, useWorkspace } from "../lib/store";
 import { Modal } from "./TeamSelect";
@@ -446,6 +446,8 @@ function AgentModal({ agent, busy, onClose, onSave }: {
     description: agent.description ?? "",
     systemPrompt: agent.systemPrompt ?? "",
   });
+  const runtime = useAgentRuntime();
+  const runtimeInfo = runtime?.providers[form.provider];
   return (
     <Modal title={`配置 Agent：${agent.name}`} onClose={onClose} wide>
       <div className="space-y-3">
@@ -457,19 +459,31 @@ function AgentModal({ agent, busy, onClose, onSave }: {
           <div>
             <label className="text-sm font-medium">运行时</label>
             <select value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value as Agent["provider"] })} className="mt-1.5 w-full h-10 rounded-md border bg-background px-2 text-sm">
-              <option value="auto">自动（跟随平台配置）</option>
-              <option value="mock">Mock（离线演示）</option>
-              <option value="claude">Claude Code</option>
-              <option value="opencode">opencode</option>
+              {RUNTIME_OPTIONS.map((p) => {
+                const unavailable = runtime?.providers[p.id]?.installed === false;
+                return (
+                  <option key={p.id} value={p.id} disabled={unavailable}>
+                    {p.label}{unavailable ? "（本机未安装）" : ""}
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>
         <div>
           <label className="text-sm font-medium">模型（可选）</label>
-          <Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className="mt-1.5" list="agent-model-options" placeholder={modelPlaceholder(form.provider)} />
+          <Input
+            value={form.model}
+            disabled={runtimeInfo?.supported === false}
+            onChange={(e) => setForm({ ...form, model: e.target.value })}
+            className="mt-1.5"
+            list="agent-model-options"
+            placeholder={modelPlaceholder(form.provider)}
+          />
           <datalist id="agent-model-options">
-            {(MODEL_SUGGESTIONS[form.provider] ?? []).map((m) => <option key={m} value={m} />)}
+            {(runtimeInfo?.models ?? []).map((m) => <option key={m.id} value={m.id} />)}
           </datalist>
+          {runtimeHint(runtimeInfo) && <p className="text-[11px] text-muted-foreground mt-1">{runtimeHint(runtimeInfo)}</p>}
         </div>
         <div>
           <label className="text-sm font-medium">描述</label>

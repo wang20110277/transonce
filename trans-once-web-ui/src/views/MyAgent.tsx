@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader, EmptyState, StatusPill, Pill, Select, Textarea, timeAgo, statusLabel } from "../components/common";
 import { api } from "../services/api";
-import { MODEL_SUGGESTIONS, modelPlaceholder } from "../lib/agentModels";
+import { RUNTIME_OPTIONS, useAgentRuntime, runtimeHint, modelPlaceholder } from "../lib/agentModels";
 import { can, isAdmin, useSession } from "../lib/session";
 import { askAgent, refreshWorkspace, useWorkspace } from "../lib/store";
 
@@ -36,6 +36,7 @@ export function MyAgent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const runtime = useAgentRuntime();
   const editable = isAdmin() || can("agent.manage") || agent?.ownerUserId === user?.id;
   const runs = agentRuns.filter((r) => !agent || r.agentId === agent.id);
 
@@ -55,6 +56,7 @@ export function MyAgent() {
     description: agent.description ?? "",
     systemPrompt: agent.systemPrompt ?? "",
   };
+  const runtimeInfo = runtime?.providers[current.provider];
 
   const save = async () => {
     setBusy(true);
@@ -153,18 +155,30 @@ export function MyAgent() {
             <div>
               <label className="text-xs font-medium text-muted-foreground">运行时</label>
               <Select value={current.provider} onChange={(v) => setForm({ ...current, provider: v })} className="mt-1 w-full">
-                <option value="auto">自动（跟随平台）</option>
-                <option value="mock">Mock（离线）</option>
-                <option value="claude">Claude Code</option>
-                <option value="opencode">opencode</option>
+                {RUNTIME_OPTIONS.map((p) => {
+                  const unavailable = runtime?.providers[p.id]?.installed === false;
+                  return (
+                    <option key={p.id} value={p.id} disabled={unavailable}>
+                      {p.label}{unavailable ? "（本机未安装）" : ""}
+                    </option>
+                  );
+                })}
               </Select>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">模型（可选）</label>
-              <Input value={current.model} disabled={!editable} onChange={(e) => setForm({ ...current, model: e.target.value })} className="mt-1" list="agent-model-options" placeholder={modelPlaceholder(current.provider)} />
+              <Input
+                value={current.model}
+                disabled={!editable || runtimeInfo?.supported === false}
+                onChange={(e) => setForm({ ...current, model: e.target.value })}
+                className="mt-1"
+                list="agent-model-options"
+                placeholder={modelPlaceholder(current.provider)}
+              />
               <datalist id="agent-model-options">
-                {(MODEL_SUGGESTIONS[current.provider] ?? []).map((m) => <option key={m} value={m} />)}
+                {(runtimeInfo?.models ?? []).map((m) => <option key={m.id} value={m.id} />)}
               </datalist>
+              {runtimeHint(runtimeInfo) && <p className="text-[11px] text-muted-foreground mt-1">{runtimeHint(runtimeInfo)}</p>}
             </div>
           </div>
           <div>
