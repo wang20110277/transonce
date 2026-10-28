@@ -53,6 +53,9 @@ trans-once/
   migrations/versions/    # 0001 初始链路，0002 多租户 + RBAC + Agent + 全量平台表
   seed.py                 # 幂等演示数据
   tests/smoke.py          # 端到端冒烟测试（stdlib）
+trans-once-desktop/
+  electron/main.js        # Electron 主进程：app:// 协议加载 dist/ 并代理 /api、/asr
+  README.md               # 桌面客户端使用说明
 docs/ARCHITECTURE.md      # 架构与数据模型说明
 ```
 
@@ -97,6 +100,18 @@ npm run dev          # http://localhost:3002（固定端口，占用则启动失
 ```
 
 Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直接报错，不会漂移），并将 `/api` 代理到 `http://localhost:9005`、`/asr` 代理到 `http://localhost:8001`。
+
+### 4. 桌面客户端（Electron，可选）
+
+```bash
+cd trans-once-web-ui && npm run build   # 先产出 dist/
+
+cd ../trans-once-desktop
+npm install
+npm start                               # 需后端已启动；或 TRANSONCE_AUTOSTART=1 npm start
+```
+
+客户端通过自定义 `app://` 协议加载前端构建产物，并把 `/api`、`/asr` 代理到本地后端（前端零改动）。启动时等待后端健康检查通过，未就绪则停留在引导页自动重试。详见 `trans-once-desktop/README.md`（含开发模式、冒烟验证与 DMG 打包）。
 
 ## 演示账号
 

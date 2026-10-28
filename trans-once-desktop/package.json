@@ -1,0 +1,41 @@
+{
+  "name": "trans-once-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TransOnce 桌面客户端（Electron 壳：加载 trans-once-web-ui 构建产物，代理 /api 与 /asr 到本地后端）",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "smoke": "electron . --smoke",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "local.transonce.desktop",
+    "productName": "TransOnce",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../trans-once-web-ui/dist",
+        "to": "web-ui"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
+    }
+  },
+  "allowScripts": {
+    "electron": true
+  }
+}
