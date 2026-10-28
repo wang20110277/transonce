@@ -40,6 +40,9 @@ cd trans-once-desktop && npm run dev  # 终端 2：加载开发服务器，/api 
 ```bash
 npm run smoke
 # stdout 输出 {"loginStatus":200,"mounted":true,...}，退出码 0 即通过
+
+npx electron . --screenshot=/tmp/transonce.png
+# 有头验证：窗口加载完成后截图到指定路径并自动退出
 ```
 
 ## 配置项（环境变量）

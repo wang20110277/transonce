@@ -10,6 +10,8 @@ const path = require('node:path');
 
 const DEV = process.argv.includes('--dev');
 const SMOKE = process.argv.includes('--smoke');
+// --screenshot=/path/to.png：加载完成后截图并退出（冒烟/留证用）。
+const SCREENSHOT = (process.argv.find((a) => a.startsWith('--screenshot=')) || '').slice(13) || '';
 const AUTOSTART = process.argv.includes('--autostart') || process.env.TRANSONCE_AUTOSTART === '1';
 
 const BACKEND = process.env.TRANSONCE_BACKEND || 'http://127.0.0.1:9005';
@@ -181,6 +183,21 @@ function smokeCheck() {
 async function boot() {
   protocol.handle('app', handleApp);
   createWindow();
+  // 验证模式 --screenshot=/path/to.png：应用页渲染后截图留证并自动退出。
+  if (SCREENSHOT) {
+    win.webContents.on('did-finish-load', async () => {
+      const url = win.webContents.getURL();
+      if (url.includes('__desktop') || !(url.startsWith('app://local/') || url.startsWith(DEV_URL))) return;
+      await new Promise((resolve) => setTimeout(resolve, 1500)); // 等 React 渲染稳定
+      try {
+        fs.writeFileSync(SCREENSHOT, (await win.webContents.capturePage()).toPNG());
+        console.log('screenshot saved:', SCREENSHOT);
+      } catch (err) {
+        console.error('screenshot failed:', err);
+      }
+      app.exit(0);
+    });
+  }
   if (DEV) return win.loadURL(DEV_URL);
 
   await win.loadURL('app://local/__desktop/loading');
