@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
+import { Component } from "react";
 import type { LucideIcon } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 export function PageHeader({
   title,
@@ -43,6 +46,35 @@ export function EmptyState({
       {action}
     </Card>
   );
+}
+
+// 局部渲染出错（如 Agent 产出结构异常）时降级为错误卡片，而不是整页空白。
+// react 类型由 JS 推断，无法直接以 Component 为基类声明 props/setState，这里只声明用到的结构。
+const ReactComponent = Component as unknown as new (props: { children?: ReactNode }) => {
+  props: { children?: ReactNode };
+  setState(s: { error: Error | null }): void;
+};
+
+export class ErrorBoundary extends ReactComponent {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <Card className="p-10 flex flex-col items-center justify-center text-center gap-3 border-dashed">
+        <AlertTriangle className="w-9 h-9 text-amber-500/70" />
+        <div>
+          <p className="font-medium">页面渲染出错</p>
+          <p className="text-sm text-muted-foreground mt-1 break-all max-w-xl">{this.state.error.message}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => this.setState({ error: null })}>重试</Button>
+      </Card>
+    );
+  }
 }
 
 export function StatCard({

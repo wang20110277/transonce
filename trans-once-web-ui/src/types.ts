@@ -184,20 +184,24 @@ export type Requirement = {
   createdAt: string;
 };
 
+// Agent 产出的列表项既可能是字符串，也可能是结构化对象——渲染端需兼容两种形态。
+export type FlowSpec = string | { name?: string; trigger?: string; steps?: unknown[]; guarantee?: string };
+export type RiskSpec = string | { risk?: string; mitigation?: string; description?: string };
+
 export type Architecture = {
   style?: string;
   components?: { name: string; responsibility: string; tech: string }[];
   dataModel?: { table: string; fields: string[] }[];
   apis?: { method: string; path: string; purpose: string }[];
   deployment?: string;
-  risks?: string[];
+  risks?: RiskSpec[];
   diagram?: string;
 };
 
 export type Prototype = {
   summary?: string;
   pages?: { name: string; purpose: string; components: string[] }[];
-  flows?: string[];
+  flows?: FlowSpec[];
   acceptance?: string[];
 };
 

@@ -26,7 +26,7 @@ import { Alerts } from "./views/Alerts";
 import { MyAgent } from "./views/MyAgent";
 import { can, clearTenant, logout, refreshSession, selectTenant, useSession } from "./lib/session";
 import { invalidateWorkspace, loadWorkspace, useWorkspace } from "./lib/store";
-import { formatDate } from "./components/common";
+import { ErrorBoundary, formatDate } from "./components/common";
 
 type ViewId =
   | "dashboard" | "projects" | "meetings" | "requirements" | "development"
@@ -287,7 +287,7 @@ export default function App() {
               <div className="h-64 bg-muted rounded-xl" />
             </div>
           ) : (
-            render()
+            <ErrorBoundary>{render()}</ErrorBoundary>
           )}
         </main>
 

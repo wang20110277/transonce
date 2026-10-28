@@ -19,6 +19,18 @@ import type { Architecture, Prototype, Requirement } from "../types";
 
 type Tab = "overview" | "prototype" | "architecture";
 
+// Agent 产出不可控：渲染前统一收敛为文本 / 数组，避免对象被当作 React 子节点导致整页崩溃。
+function asText(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+function asArray<T>(v: T[] | null | undefined): T[] {
+  return Array.isArray(v) ? v : [];
+}
+
 export function Requirements() {
   const tenant = useSession((s) => s.currentTenant)!;
   const requirements = useWorkspace((s) => s.requirements);
@@ -269,10 +281,11 @@ export function Requirements() {
 }
 
 function PrototypePanel({ raw }: { raw?: string | null }) {
-  const data = useMemo<Prototype | null>(() => {
-    if (!raw) return null;
-    try { return JSON.parse(raw) as Prototype; } catch { return null; }
-  }, [raw]);
+  // useMemo 在当前 react 类型推断下会丢失泛型，直接解析保证 data 类型确定。
+  let data: Prototype | null = null;
+  if (raw) {
+    try { data = JSON.parse(raw) as Prototype; } catch { data = null; }
+  }
 
   if (!data) {
     return (
@@ -282,14 +295,14 @@ function PrototypePanel({ raw }: { raw?: string | null }) {
 
   return (
     <div className="space-y-5">
-      <div className="rounded-lg bg-primary/5 border border-primary/15 p-3 text-sm">{data.summary}</div>
+      <div className="rounded-lg bg-primary/5 border border-primary/15 p-3 text-sm">{asText(data.summary)}</div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {data.pages?.map((p) => (
-          <Card key={p.name} className="p-4 bg-muted/20">
-            <h5 className="text-sm font-semibold flex items-center gap-2"><PanelTop className="w-4 h-4 text-primary" /> {p.name}</h5>
-            <p className="text-xs text-muted-foreground mt-1">{p.purpose}</p>
+        {asArray(data.pages).map((p, i) => (
+          <Card key={i} className="p-4 bg-muted/20">
+            <h5 className="text-sm font-semibold flex items-center gap-2"><PanelTop className="w-4 h-4 text-primary" /> {asText(p?.name)}</h5>
+            <p className="text-xs text-muted-foreground mt-1">{asText(p?.purpose)}</p>
             <div className="flex flex-wrap gap-1.5 mt-2">
-              {p.components.map((c) => <Badge key={c} variant="secondary" className="text-[10px] font-normal">{c}</Badge>)}
+              {asArray(p?.components).map((c, j) => <Badge key={j} variant="secondary" className="text-[10px] font-normal">{asText(c)}</Badge>)}
             </div>
           </Card>
         ))}
@@ -298,9 +311,25 @@ function PrototypePanel({ raw }: { raw?: string | null }) {
         <section>
           <h4 className="text-sm font-semibold mb-2">关键流程</h4>
           <ol className="space-y-1.5">
-            {data.flows.map((f, i) => (
-              <li key={i} className="text-sm flex gap-2"><span className="text-muted-foreground">{i + 1}.</span>{f}</li>
-            ))}
+            {asArray(data.flows).map((f, i) => {
+              const spec = typeof f === "object" && f !== null ? f as { name?: string; trigger?: string; steps?: unknown[]; guarantee?: string } : null;
+              if (!spec) {
+                return <li key={i} className="text-sm flex gap-2"><span className="text-muted-foreground">{i + 1}.</span>{asText(f)}</li>;
+              }
+              const steps = asArray(spec.steps);
+              return (
+                <li key={i} className="rounded-lg border p-3">
+                  <p className="text-sm font-medium">{asText(spec.name) || `流程 ${i + 1}`}</p>
+                  {spec.trigger != null && <p className="text-xs text-muted-foreground mt-1">触发：{asText(spec.trigger)}</p>}
+                  {!!steps.length && (
+                    <ol className="mt-1.5 space-y-1">
+                      {steps.map((s, j) => <li key={j} className="text-xs flex gap-1.5"><span className="text-muted-foreground">{j + 1}.</span>{asText(s)}</li>)}
+                    </ol>
+                  )}
+                  {spec.guarantee != null && <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1.5">保障：{asText(spec.guarantee)}</p>}
+                </li>
+              );
+            })}
           </ol>
         </section>
       )}
@@ -308,7 +337,7 @@ function PrototypePanel({ raw }: { raw?: string | null }) {
         <section>
           <h4 className="text-sm font-semibold mb-2">交互验收点</h4>
           <ul className="space-y-1.5">
-            {data.acceptance.map((a, i) => <li key={i} className="text-sm flex gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />{a}</li>)}
+            {asArray(data.acceptance).map((a, i) => <li key={i} className="text-sm flex gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />{asText(a)}</li>)}
           </ul>
         </section>
       )}
@@ -325,24 +354,24 @@ function ArchitecturePanel({ arch }: { arch?: Architecture | null }) {
       <div className="flex flex-wrap gap-3">
         <div className="rounded-lg border p-3 flex-1 min-w-[180px]">
           <p className="text-[11px] text-muted-foreground">架构风格</p>
-          <p className="text-sm font-semibold mt-0.5">{arch.style ?? "—"}</p>
+          <p className="text-sm font-semibold mt-0.5">{arch.style ? asText(arch.style) : "—"}</p>
         </div>
         <div className="rounded-lg border p-3 flex-1 min-w-[180px]">
           <p className="text-[11px] text-muted-foreground">部署建议</p>
-          <p className="text-sm font-semibold mt-0.5">{arch.deployment ?? "—"}</p>
+          <p className="text-sm font-semibold mt-0.5">{arch.deployment ? asText(arch.deployment) : "—"}</p>
         </div>
       </div>
 
       <section>
         <h4 className="text-sm font-semibold mb-2">组件与职责</h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {arch.components?.map((c) => (
-            <div key={c.name} className="rounded-lg border p-3">
+          {asArray(arch.components).map((c, i) => (
+            <div key={i} className="rounded-lg border p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium">{c.name}</p>
-                <Badge variant="secondary" className="text-[10px]">{c.tech}</Badge>
+                <p className="text-sm font-medium">{asText(c?.name)}</p>
+                <Badge variant="secondary" className="text-[10px]">{asText(c?.tech)}</Badge>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">{c.responsibility}</p>
+              <p className="text-xs text-muted-foreground mt-1">{asText(c?.responsibility)}</p>
             </div>
           ))}
         </div>
@@ -352,11 +381,11 @@ function ArchitecturePanel({ arch }: { arch?: Architecture | null }) {
         <section>
           <h4 className="text-sm font-semibold mb-2 flex items-center gap-2"><Database className="w-4 h-4" /> 数据模型</h4>
           <div className="space-y-2">
-            {arch.dataModel.map((t) => (
-              <div key={t.table} className="rounded-lg border p-3">
-                <p className="text-sm font-medium font-mono">{t.table}</p>
+            {asArray(arch.dataModel).map((t, i) => (
+              <div key={i} className="rounded-lg border p-3">
+                <p className="text-sm font-medium font-mono">{asText(t?.table)}</p>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {t.fields.map((f) => <span key={f} className="text-[11px] font-mono bg-muted rounded px-1.5 py-0.5">{f}</span>)}
+                  {asArray(t?.fields).map((f, j) => <span key={j} className="text-[11px] font-mono bg-muted rounded px-1.5 py-0.5">{asText(f)}</span>)}
                 </div>
               </div>
             ))}
@@ -368,11 +397,11 @@ function ArchitecturePanel({ arch }: { arch?: Architecture | null }) {
         <section>
           <h4 className="text-sm font-semibold mb-2">API 设计</h4>
           <div className="rounded-lg border overflow-hidden">
-            {arch.apis.map((a, i) => (
+            {asArray(arch.apis).map((a, i) => (
               <div key={i} className={`flex items-center gap-3 px-3 py-2 text-xs ${i ? "border-t" : ""}`}>
-                <Badge variant="outline" className="font-mono text-[10px] w-14 justify-center">{a.method}</Badge>
-                <span className="font-mono flex-1 truncate">{a.path}</span>
-                <span className="text-muted-foreground hidden md:block">{a.purpose}</span>
+                <Badge variant="outline" className="font-mono text-[10px] w-14 justify-center">{asText(a?.method)}</Badge>
+                <span className="font-mono flex-1 truncate">{asText(a?.path)}</span>
+                <span className="text-muted-foreground hidden md:block">{asText(a?.purpose)}</span>
               </div>
             ))}
           </div>
@@ -383,7 +412,20 @@ function ArchitecturePanel({ arch }: { arch?: Architecture | null }) {
         <section>
           <h4 className="text-sm font-semibold mb-2 flex items-center gap-2 text-amber-600"><AlertTriangle className="w-4 h-4" /> 风险与待确认</h4>
           <ul className="space-y-1.5">
-            {arch.risks.map((r, i) => <li key={i} className="text-sm flex gap-2"><span>•</span>{r}</li>)}
+            {asArray(arch.risks).map((r, i) => {
+              const spec = typeof r === "object" && r !== null ? r as { risk?: string; mitigation?: string; description?: string } : null;
+              if (!spec) {
+                return <li key={i} className="text-sm flex gap-2"><span>•</span>{asText(r)}</li>;
+              }
+              const text = asText(spec.risk) || asText(spec.description);
+              const mitigation = asText(spec.mitigation);
+              return (
+                <li key={i} className="text-sm flex gap-2">
+                  <span>•</span>
+                  <span>{text}{mitigation && <span className="block text-xs text-muted-foreground mt-0.5">缓解：{mitigation}</span>}</span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
@@ -391,7 +433,7 @@ function ArchitecturePanel({ arch }: { arch?: Architecture | null }) {
       {arch.diagram && (
         <section>
           <h4 className="text-sm font-semibold mb-2">架构图</h4>
-          <pre className="text-xs bg-muted/50 rounded-lg p-3 overflow-auto whitespace-pre-wrap">{arch.diagram}</pre>
+          <pre className="text-xs bg-muted/50 rounded-lg p-3 overflow-auto whitespace-pre-wrap">{asText(arch.diagram)}</pre>
         </section>
       )}
     </div>
