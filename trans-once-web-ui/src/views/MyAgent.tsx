@@ -154,7 +154,7 @@ export function MyAgent() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">运行时</label>
-              <Select value={current.provider} onChange={(v) => setForm({ ...current, provider: v })} className="mt-1 w-full">
+              <Select value={current.provider} onChange={(v) => setForm({ ...current, provider: v, model: "" })} className="mt-1 w-full">
                 {RUNTIME_OPTIONS.map((p) => {
                   const unavailable = runtime?.providers[p.id]?.installed === false;
                   return (

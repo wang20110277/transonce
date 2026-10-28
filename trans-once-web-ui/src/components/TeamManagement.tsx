@@ -458,7 +458,7 @@ function AgentModal({ agent, busy, onClose, onSave }: {
           </div>
           <div>
             <label className="text-sm font-medium">运行时</label>
-            <select value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value as Agent["provider"] })} className="mt-1.5 w-full h-10 rounded-md border bg-background px-2 text-sm">
+            <select value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value as Agent["provider"], model: "" })} className="mt-1.5 w-full h-10 rounded-md border bg-background px-2 text-sm">
               {RUNTIME_OPTIONS.map((p) => {
                 const unavailable = runtime?.providers[p.id]?.installed === false;
                 return (
