@@ -8,7 +8,8 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "smoke": "electron . --smoke",
-    "dist": "electron-builder --mac"
+    "dist": "electron-builder --mac",
+    "dist:dir": "electron-builder --dir"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -32,8 +33,10 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": "dmg"
-    }
+      "target": "dmg",
+      "icon": "build/icon.icns"
+    },
+    "icon": "build/icon.png"
   },
   "allowScripts": {
     "electron": true

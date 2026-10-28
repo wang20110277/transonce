@@ -59,9 +59,11 @@ npx electron . --screenshot=/tmp/transonce.png
 
 ```bash
 cd trans-once-web-ui && npm run build   # 产物会通过 extraResources 打进应用
-cd ../trans-once-desktop && npm run dist
-# 输出在 trans-once-desktop/out/（DMG）
+cd ../trans-once-desktop && npm run dist        # DMG，输出在 out/
+npm run dist:dir                               # 仅快速重打包（不打 DMG）
 ```
+
+**应用名与图标**：打包产物为 `out/mac/TransOnce.app` —— 名称来自 `productName`，图标为 `build/icon.icns`（由 `trans-once-web-ui/public/favicon.svg` 生成，渲染脚本在 `build/iconsrc/`，改 SVG 后重跑再重新打包即可）。日常使用建议直接启动 `out/mac/TransOnce.app`；`npm start` 仍为开发模式，Dock 显示为 Electron 属正常。
 
 ## 安全约定
 
