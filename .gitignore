@@ -28,3 +28,6 @@ aidevops/
 # Editor
 .idea/
 .vscode/
+.claude/
+.multica/
+.gstack/
