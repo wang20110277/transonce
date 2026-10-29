@@ -102,19 +102,20 @@ def create_connection(tenant_id: str, body: dict = Body(...), user: dict = Depen
         base_url = gitlab_client.normalize_base_url(body.get("baseUrl") or "")
     except gitlab_client.GitlabError as e:
         raise HTTPException(400, str(e)) from e
+    insecure_tls = bool(body.get("insecureTls"))
     account = None
     if mode == "live":
         if not token:
             raise HTTPException(400, "真实模式需要 GitLab 访问令牌（建议只读 read_api 权限）")
         try:
-            account = gitlab_client.fetch_current_user(base_url, token).get("username")
+            account = gitlab_client.fetch_current_user(base_url, token, insecure_tls).get("username")
         except gitlab_client.GitlabError as e:
             raise HTTPException(400, f"连接测试失败：{e}") from e
     row = db.execute_returning(
         """INSERT INTO gitlab_connections
-           (tenant_id, name, base_url, token_enc, account, mode, status, created_by)
-           VALUES (%s,%s,%s,%s,%s,%s,'active',%s) RETURNING *""",
-        (tenant_id, name, base_url, encrypt_secret(token), account, mode, user["id"]),
+           (tenant_id, name, base_url, token_enc, account, mode, status, insecure_tls, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,'active',%s,%s) RETURNING *""",
+        (tenant_id, name, base_url, encrypt_secret(token), account, mode, insecure_tls, user["id"]),
     )
     log_activity(
         ctx, "gitlab.connected",
@@ -139,19 +140,23 @@ def update_connection(
         raise HTTPException(400, str(e)) from e
     token = (body.get("token") or "").strip()
     token_enc = encrypt_secret(token) if token else conn.get("token_enc")
+    insecure_tls = bool(body.get("insecureTls", conn.get("insecure_tls")))
     account = conn.get("account")
     if mode == "live" and not token_enc:
         raise HTTPException(400, "真实模式需要 GitLab 访问令牌")
-    if mode == "live" and (token or base_url != conn["base_url"]):
+    if mode == "live" and (token or base_url != conn["base_url"] or insecure_tls != bool(conn.get("insecure_tls"))):
         try:
-            account = gitlab_client.fetch_current_user(base_url, decrypt_secret(token_enc) or "").get("username")
+            account = gitlab_client.fetch_current_user(
+                base_url, decrypt_secret(token_enc) or "", insecure_tls
+            ).get("username")
         except gitlab_client.GitlabError as e:
             raise HTTPException(400, f"连接测试失败：{e}") from e
     row = db.execute_returning(
         """UPDATE gitlab_connections
-           SET name=%s, base_url=%s, token_enc=%s, account=%s, mode=%s, status='active', last_error=NULL
+           SET name=%s, base_url=%s, token_enc=%s, account=%s, mode=%s, insecure_tls=%s,
+               status='active', last_error=NULL
            WHERE id=%s RETURNING *""",
-        (name, base_url, token_enc, account, mode, connection_id),
+        (name, base_url, token_enc, account, mode, insecure_tls, connection_id),
     )
     repo_count = db.fetch_one(
         "SELECT count(*) AS c FROM git_repos WHERE connection_id=%s", (connection_id,)
@@ -177,7 +182,10 @@ def sync_connection(tenant_id: str, connection_id: str, user: dict = Depends(get
         projects, source = gitlab_client.demo_projects(), "demo"
     else:
         try:
-            projects = gitlab_client.fetch_projects(conn["base_url"], decrypt_secret(conn.get("token_enc")) or "")
+            projects = gitlab_client.fetch_projects(
+                conn["base_url"], decrypt_secret(conn.get("token_enc")) or "",
+                insecure_tls=bool(conn.get("insecure_tls")),
+            )
             source = "gitlab"
         except gitlab_client.GitlabError as e:
             db.execute(

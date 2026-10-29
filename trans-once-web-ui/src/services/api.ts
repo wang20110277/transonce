@@ -233,9 +233,9 @@ export const api = {
 
   coderepos: {
     connections: (tid: string) => get<GitlabConnection[]>(`${T(tid)}/gitlab/connections`),
-    createConnection: (tid: string, body: { name: string; baseUrl: string; token?: string; mode: "live" | "demo" }) =>
+    createConnection: (tid: string, body: { name: string; baseUrl: string; token?: string; mode: "live" | "demo"; insecureTls?: boolean }) =>
       post<GitlabConnection>(`${T(tid)}/gitlab/connections`, body),
-    updateConnection: (tid: string, cid: string, body: Partial<{ name: string; baseUrl: string; token: string; mode: "live" | "demo" }>) =>
+    updateConnection: (tid: string, cid: string, body: Partial<{ name: string; baseUrl: string; token: string; mode: "live" | "demo"; insecureTls: boolean }>) =>
       patch<GitlabConnection>(`${T(tid)}/gitlab/connections/${cid}`, body),
     removeConnection: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/gitlab/connections/${cid}`),
     syncConnection: (tid: string, cid: string) =>

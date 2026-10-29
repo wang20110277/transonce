@@ -406,6 +406,7 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
     baseUrl: conn?.baseUrl ?? "",
     mode: conn?.mode ?? "demo",
     token: "",
+    insecureTls: conn?.insecureTls ?? false,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -414,7 +415,12 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
     setBusy(true);
     setError(null);
     try {
-      const body = { name: form.name, baseUrl: form.baseUrl, mode: form.mode as "live" | "demo" };
+      const body = {
+        name: form.name,
+        baseUrl: form.baseUrl,
+        mode: form.mode as "live" | "demo",
+        ...(form.mode === "live" ? { insecureTls: form.insecureTls } : {}),
+      };
       if (conn) await api.coderepos.updateConnection(tenant.tenant.id, conn.id, { ...body, token: form.token || undefined });
       else await api.coderepos.createConnection(tenant.tenant.id, { ...body, token: form.token || undefined });
       await onSaved();
@@ -452,6 +458,12 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
           <Input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} className="mt-1.5"
             placeholder={conn ? (form.mode === "demo" ? "••••••（可选）" : `当前 ${conn.tokenMasked ?? "未配置"}，留空保持不变`) : form.mode === "demo" ? "演示模式无需令牌" : "加密存储，接口只返回掩码"} />
         </div>
+        {form.mode === "live" && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={form.insecureTls} onChange={(e) => setForm({ ...form, insecureTls: e.target.checked })} className="accent-primary" />
+            自签名 / IP 证书（跳过 TLS 校验，仅影响对该地址的出站请求）
+          </label>
+        )}
         <p className="text-[11px] text-muted-foreground">
           真实模式保存时会调用 GitLab <code>/user</code> 接口验证地址与令牌；演示模式完全离线，同步时生成一套确定的示例代码库。
         </p>

@@ -344,6 +344,7 @@ export type GitlabConnection = {
   mode: "live" | "demo";
   status: "active" | "error";
   account?: string | null;
+  insecureTls?: boolean;
   hasToken?: boolean;
   tokenMasked?: string | null;
   lastSyncAt?: string | null;

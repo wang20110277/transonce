@@ -191,6 +191,7 @@ def gitlab_connection(r: dict) -> dict:
         "mode": r.get("mode"),
         "status": r.get("status"),
         "account": r.get("account"),
+        "insecureTls": bool(r.get("insecure_tls")),
         "hasToken": bool(r.get("token_enc")),
         "tokenMasked": mask_secret(decrypt_secret(r.get("token_enc"))),
         "lastSyncAt": _iso(r.get("last_sync_at")),

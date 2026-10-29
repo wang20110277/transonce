@@ -8,6 +8,7 @@ backs the offline demo mode the same way mock_agent backs agent runs.
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,7 +32,19 @@ def normalize_base_url(url: str) -> str:
     return url
 
 
-def _request(base_url: str, token: str, path: str, params: dict | None = None) -> dict | list:
+def _tls_context(insecure_tls: bool) -> ssl.SSLContext | None:
+    """Per-connection opt-out for self-signed / IP certificates."""
+    if not insecure_tls:
+        return None
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _request(
+    base_url: str, token: str, path: str, params: dict | None = None, insecure_tls: bool = False
+) -> dict | list:
     if not token:
         raise GitlabError("未配置 GitLab 访问令牌")
     query = ("?" + urllib.parse.urlencode(params)) if params else ""
@@ -40,7 +53,9 @@ def _request(base_url: str, token: str, path: str, params: dict | None = None) -
         headers={"PRIVATE-TOKEN": token, "Accept": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=GITLAB_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(
+            req, timeout=GITLAB_TIMEOUT_SECONDS, context=_tls_context(insecure_tls)
+        ) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
@@ -54,9 +69,9 @@ def _request(base_url: str, token: str, path: str, params: dict | None = None) -
         raise GitlabError("GitLab 返回了无法解析的内容，请确认地址指向 GitLab 实例") from exc
 
 
-def fetch_current_user(base_url: str, token: str) -> dict:
+def fetch_current_user(base_url: str, token: str, insecure_tls: bool = False) -> dict:
     """Validate credentials; returns the account behind the token."""
-    data = _request(base_url, token, "/user")
+    data = _request(base_url, token, "/user", insecure_tls=insecure_tls)
     if not isinstance(data, dict) or "id" not in data:
         raise GitlabError("GitLab /user 响应异常")
     return data
@@ -82,7 +97,9 @@ def _normalize_project(p: dict) -> dict:
     }
 
 
-def fetch_projects(base_url: str, token: str, max_pages: int = 10) -> list[dict]:
+def fetch_projects(
+    base_url: str, token: str, max_pages: int = 10, insecure_tls: bool = False
+) -> list[dict]:
     """List every project the token can see (offset pagination, ≤100/page)."""
     out: list[dict] = []
     for page in range(1, max_pages + 1):
@@ -90,6 +107,7 @@ def fetch_projects(base_url: str, token: str, max_pages: int = 10) -> list[dict]
             base_url, token, "/projects",
             {"membership": "true", "simple": "true", "order_by": "path",
              "sort": "asc", "per_page": 100, "page": page},
+            insecure_tls=insecure_tls,
         )
         if not isinstance(batch, list):
             raise GitlabError("GitLab /projects 响应异常")
