@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { Component } from "react";
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ArrowLeft } from "lucide-react";
+import { motion } from "motion/react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -276,5 +277,21 @@ export function Textarea({
       placeholder={placeholder}
       className={`w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring ${className}`}
     />
+  );
+}
+
+// 轻量居中弹窗：点击遮罩关闭，wide 控制宽度。原先定义在 TeamSelect，因
+// 个人设置等组件也需要（且 TeamSelect 反向引用它们），移到公共模块。
+export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className={`bg-card border rounded-xl shadow-2xl w-full ${wide ? "max-w-3xl" : "max-w-md"} max-h-[88vh] overflow-auto`} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <h3 className="font-semibold">{title}</h3>
+          <Button variant="ghost" size="sm" onClick={onClose}><ArrowLeft className="w-4 h-4" /></Button>
+        </div>
+        <div className="p-5">{children}</div>
+      </motion.div>
+    </div>
   );
 }

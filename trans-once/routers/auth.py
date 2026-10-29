@@ -138,19 +138,31 @@ def me(user: dict = Depends(get_current_user)):
 
 @router.patch("/me")
 def update_me(body: dict = Body(...), user: dict = Depends(get_current_user)):
-    name = body.get("name") or user["name"]
+    name = (body.get("name") or "").strip() or user["name"]
+    if not name:
+        raise HTTPException(400, "请输入姓名")
     avatar = body.get("avatar", user.get("avatar"))
+    email = (body.get("email") or "").strip().lower()
+    if email and email != user["email"].lower():
+        if not EMAIL_RE.match(email):
+            raise HTTPException(400, "请输入有效的邮箱地址")
+        if db.fetch_one(
+            "SELECT id FROM users WHERE lower(email)=lower(%s) AND id<>%s", (email, user["id"])
+        ):
+            raise HTTPException(409, "该邮箱已被其他账号使用")
     password = body.get("password")
-    if password is not None:
-        if len(password) < 6:
-            raise HTTPException(400, "密码至少 6 位")
-        # A valid session alone must not be enough to lock the real owner out.
+    if password is not None and len(password) < 6:
+        raise HTTPException(400, "密码至少 6 位")
+    # Email and password are login credentials: a valid session alone (e.g. an
+    # unlocked laptop) must not be enough to take the account over.
+    if password is not None or email:
         if not verify_password(body.get("currentPassword") or "", user["password_hash"]):
             raise HTTPException(400, "当前密码不正确")
-        db.execute(
-            "UPDATE users SET name=%s, avatar=%s, password_hash=%s WHERE id=%s",
-            (name, avatar, hash_password(password), user["id"]),
-        )
-    else:
-        db.execute("UPDATE users SET name=%s, avatar=%s WHERE id=%s", (name, avatar, user["id"]))
+    fields: dict = {"name": name, "avatar": avatar}
+    if email:
+        fields["email"] = email
+    if password is not None:
+        fields["password_hash"] = hash_password(password)
+    assigns = ", ".join(f"{col}=%s" for col in fields)
+    db.execute(f"UPDATE users SET {assigns} WHERE id=%s", (*fields.values(), user["id"]))
     return _public_user(db.fetch_one("SELECT * FROM users WHERE id=%s", (user["id"],)))

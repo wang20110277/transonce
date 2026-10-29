@@ -76,7 +76,7 @@ export const api = {
     register: (email: string, name: string, password: string) =>
       post<{ token: string; user: AuthUser }>("/auth/register", { email, name, password }),
     me: () => get<{ user: AuthUser; memberships: TenantSummary[] }>("/auth/me"),
-    updateMe: (body: Partial<{ name: string; avatar: string; password: string; currentPassword: string }>) =>
+    updateMe: (body: Partial<{ name: string; email: string; avatar: string; password: string; currentPassword: string }>) =>
       patch<AuthUser>("/auth/me", body),
     permissions: () => get<Permission[]>("/permissions"),
   },

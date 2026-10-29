@@ -3,13 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, FolderKanban, CalendarClock, FileText, ListChecks, TestTube2,
   Package, Workflow, Rocket, Server, Activity, Bell, Bot, Users, LogOut, GitBranch,
-  Building2, ChevronDown, Menu, X, Moon, Sun, Sparkles, ArrowLeftRight, ShieldAlert,
+  Building2, ChevronDown, Menu, X, Moon, Sun, Sparkles, ArrowLeftRight, ShieldAlert, UserCog,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Login } from "./components/Login";
 import { TeamSelect } from "./components/TeamSelect";
 import { TeamManagement } from "./components/TeamManagement";
+import { ProfileSettings } from "./components/ProfileSettings";
 import { MeetingIngest } from "./components/MeetingIngest";
 import { DevelopmentBoard } from "./components/DevelopmentBoard";
 import { TestingCenter } from "./components/TestingCenter";
@@ -90,6 +91,7 @@ export default function App() {
   const [view, setView] = useState<ViewId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [tenantMenu, setTenantMenu] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("transonce.theme") === "dark");
 
   useEffect(() => {
@@ -244,13 +246,16 @@ export default function App() {
 
         <div className="p-3 border-t shrink-0">
           <div className="flex items-center gap-2 px-1">
-            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0">
-              {user.name.slice(0, 2).toUpperCase()}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium truncate">{user.name}</p>
-              <p className="text-[10px] text-muted-foreground truncate">{user.email}</p>
-            </div>
+            <button onClick={() => setProfileOpen(true)} title="个人设置" className="flex items-center gap-2 min-w-0 flex-1 rounded-md px-1 py-0.5 hover:bg-muted/60 transition-colors text-left">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0">
+                {user.name.slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium truncate">{user.name}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{user.email}</p>
+              </div>
+            </button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="个人设置" onClick={() => setProfileOpen(true)}><UserCog className="w-3.5 h-3.5" /></Button>
             <Button variant="ghost" size="icon" className="h-7 w-7" title="退出登录" onClick={logout}><LogOut className="w-3.5 h-3.5" /></Button>
           </div>
         </div>
@@ -301,6 +306,7 @@ export default function App() {
       </div>
 
       <GlobalAIChat />
+      {profileOpen && <ProfileSettings onClose={() => setProfileOpen(false)} />}
     </div>
   );
 }

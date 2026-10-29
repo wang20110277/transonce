@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -6,11 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Building2, Plus, ChevronRight, Users, Shield, Search, CheckCircle2,
-  Clock, LogOut, Loader2, ArrowLeft, Globe,
+  Clock, LogOut, Loader2, UserCog, Globe,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { api } from "../services/api";
 import { logout, reloadMemberships, selectTenant, useSession } from "../lib/session";
+import { Modal } from "./common";
+import { ProfileSettings } from "./ProfileSettings";
 
 type DiscoverItem = {
   tenant: { id: string; name: string; slug: string; description?: string | null; logo?: string | null };
@@ -32,6 +33,7 @@ export function TeamSelect() {
   const [form, setForm] = useState({ name: "", description: "" });
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
 
   const loadDiscover = async (query = "") => {
     setLoading(true);
@@ -93,9 +95,14 @@ export function TeamSelect() {
               {user?.name}，你好。你已加入 {memberships.length} 个租户{user?.isSuperAdmin ? "（超级管理员可见全部租户）" : ""}
             </p>
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} className="text-muted-foreground">
-            <LogOut className="w-4 h-4 mr-2" /> 退出登录
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={() => setProfileOpen(true)} className="text-muted-foreground">
+              <UserCog className="w-4 h-4 mr-2" /> 个人设置
+            </Button>
+            <Button variant="ghost" size="sm" onClick={logout} className="text-muted-foreground">
+              <LogOut className="w-4 h-4 mr-2" /> 退出登录
+            </Button>
+          </div>
         </div>
 
         <div className="flex gap-1 p-1 bg-muted rounded-lg mb-6 w-fit">
@@ -196,6 +203,8 @@ export function TeamSelect() {
         </Modal>
       )}
 
+      {profileOpen && <ProfileSettings onClose={() => setProfileOpen(false)} />}
+
       {createOpen && (
         <Modal title="创建租户" onClose={() => setCreateOpen(false)}>
           <div className="space-y-3">
@@ -219,16 +228,6 @@ export function TeamSelect() {
   );
 }
 
-export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
-  return (
-    <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className={`bg-card border rounded-xl shadow-2xl w-full ${wide ? "max-w-3xl" : "max-w-md"} max-h-[88vh] overflow-auto`} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <h3 className="font-semibold">{title}</h3>
-          <Button variant="ghost" size="sm" onClick={onClose}><ArrowLeft className="w-4 h-4" /></Button>
-        </div>
-        <div className="p-5">{children}</div>
-      </motion.div>
-    </div>
-  );
-}
+// Modal 定义已移至 common.tsx（个人设置弹窗等组件也要用，且与 TeamSelect 相互引用）。
+// 此处保留同名再导出，避免十余处既有引用全部改动。
+export { Modal } from "./common";
