@@ -98,15 +98,22 @@ def _normalize_project(p: dict) -> dict:
 
 
 def fetch_projects(
-    base_url: str, token: str, max_pages: int = 10, insecure_tls: bool = False
+    base_url: str, token: str, max_pages: int = 10, insecure_tls: bool = False,
+    all_visible: bool = False,
 ) -> list[dict]:
-    """List every project the token can see (offset pagination, ≤100/page)."""
+    """List projects (offset pagination, ≤100/page).
+
+    `all_visible=False` limits to the token user's memberships. Instance
+    admins should pass True: the default listing then returns every project
+    they can see, including internal/private ones they are not a member of.
+    """
+    params = {"simple": "true", "order_by": "path", "sort": "asc", "per_page": 100}
+    if not all_visible:
+        params["membership"] = "true"
     out: list[dict] = []
     for page in range(1, max_pages + 1):
         batch = _request(
-            base_url, token, "/projects",
-            {"membership": "true", "simple": "true", "order_by": "path",
-             "sort": "asc", "per_page": 100, "page": page},
+            base_url, token, "/projects", {**params, "page": page},
             insecure_tls=insecure_tls,
         )
         if not isinstance(batch, list):

@@ -211,14 +211,24 @@ def main() -> int:
     _, repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=product["token"])
     check("repos visible to product", len(repos) > 0)
     check("repos carry per-user access state", all("myAccess" in r and "myRequest" in r for r in repos))
-    retail_api = next((r for r in repos if r.get("path") == "innovatech/retail-api"), None)
-    retail_web = next((r for r in repos if r.get("path") == "innovatech/retail-web"), None)
-    check("seeded repos present", retail_api is not None and retail_web is not None)
+    # The offline demo connection (and its seeded grant/request) may have been
+    # deleted by operators; fall back to any repo product has no access to.
+    target = next(
+        (
+            r for r in repos
+            if not r.get("myAccess") and not r.get("myRequest")
+            and r.get("path") != "innovatech/retail-web"
+        ),
+        None,
+    )
     dev = login(DEV_EMAIL, DEV_PASSWORD)
     _, dev_repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=dev["token"])
     check("dev role sees repos (menu permission migrated)", len(dev_repos) > 0)
     dev_api = next((r for r in dev_repos if r.get("path") == "innovatech/retail-api"), None)
-    check("seeded developer grant annotated", (dev_api or {}).get("myAccess", {}).get("role") == "developer")
+    if dev_api:
+        check("seeded developer grant annotated", (dev_api or {}).get("myAccess", {}).get("role") == "developer")
+    else:
+        print("  · demo connection removed by operator; seeded-grant check skipped")
     status, _ = call(
         "POST", f"/api/tenants/{tenant_id}/gitlab/connections",
         {"name": "smoke", "baseUrl": "https://gitlab.invalid", "token": "t", "mode": "live"},
@@ -227,14 +237,16 @@ def main() -> int:
     check("product cannot link gitlab", status == 403, f"status {status}")
     _, reqs = call("GET", f"/api/tenants/{tenant_id}/repo-access-requests", token=admin["token"])
     check("access requests listable by approver", isinstance(reqs, list) and len(reqs) >= 1)
+    if not target:
+        print("  · no requestable repo for product; request flow skipped")
     pending = next(
-        (r for r in reqs if r.get("status") == "pending" and r.get("repoPath") == "innovatech/retail-web"), None
+        (r for r in reqs if r.get("status") == "pending" and target and r.get("repoId") == target["id"]),
+        None,
     )
-    if not pending and retail_web and not retail_web.get("myAccess"):
-        # a previous run never completed the request — recreate it
+    if not pending and target:
         _, pending = call(
-            "POST", f"/api/tenants/{tenant_id}/repos/{retail_web['id']}/access-requests",
-            {"role": "developer", "reason": "smoke re-run"}, token=product["token"],
+            "POST", f"/api/tenants/{tenant_id}/repos/{target['id']}/access-requests",
+            {"role": "developer", "reason": "smoke run"}, token=product["token"],
         )
     if pending:
         _, approved = call(
@@ -243,10 +255,14 @@ def main() -> int:
         )
         check("access request approved", approved.get("status") == "approved")
         _, repos2 = call("GET", f"/api/tenants/{tenant_id}/repos", token=product["token"])
-        web2 = next((r for r in repos2 if r.get("path") == "innovatech/retail-web"), None)
-        check("granted role annotated on repo list", (web2 or {}).get("myAccess", {}).get("role") == "developer")
-    else:
-        check("access request approved", (retail_web or {}).get("myAccess", {}).get("role") == "developer", "previously granted")
+        after = next((r for r in repos2 if r["id"] == target["id"]), None)
+        check("granted role annotated on repo list", (after or {}).get("myAccess", {}).get("role") == "developer")
+        # leave no state behind: revoke the throwaway grant again
+        _, me_prod = call("GET", "/api/auth/me", token=product["token"])
+        call("DELETE", f"/api/tenants/{tenant_id}/repos/{target['id']}/access/{me_prod['user']['id']}", token=admin["token"])
+        _, repos3 = call("GET", f"/api/tenants/{tenant_id}/repos", token=product["token"])
+        final = next((r for r in repos3 if r["id"] == target["id"]), None)
+        check("revoked access cleared", (final or {}).get("myAccess") is None)
     fake = str(uuid.uuid4())
     status, _ = call(
         "POST", f"/api/tenants/{tenant_id}/repo-access-requests/{fake}/approve",

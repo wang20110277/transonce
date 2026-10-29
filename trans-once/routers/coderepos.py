@@ -182,9 +182,14 @@ def sync_connection(tenant_id: str, connection_id: str, user: dict = Depends(get
         projects, source = gitlab_client.demo_projects(), "demo"
     else:
         try:
+            token = decrypt_secret(conn.get("token_enc")) or ""
+            insecure = bool(conn.get("insecure_tls"))
+            # Instance admins get the full visible catalog (internal/private
+            # projects they are not members of included); members their own.
+            account = gitlab_client.fetch_current_user(conn["base_url"], token, insecure)
+            all_visible = bool(account.get("is_admin"))
             projects = gitlab_client.fetch_projects(
-                conn["base_url"], decrypt_secret(conn.get("token_enc")) or "",
-                insecure_tls=bool(conn.get("insecure_tls")),
+                conn["base_url"], token, insecure_tls=insecure, all_visible=all_visible
             )
             source = "gitlab"
         except gitlab_client.GitlabError as e:
