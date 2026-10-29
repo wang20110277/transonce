@@ -133,13 +133,15 @@ export function TeamSelect() {
                 </div>
               </Card>
             ))}
-            <Card className="border-dashed border-2 p-5 flex flex-col items-center justify-center gap-2 bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => setCreateOpen(true)}>
-              <div className="bg-background p-2.5 rounded-full shadow-sm"><Plus className="w-5 h-5 text-primary" /></div>
-              <div className="text-center">
-                <h3 className="font-semibold">创建新租户</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">你将自动成为租户管理员</p>
-              </div>
-            </Card>
+            {user?.isSuperAdmin && (
+              <Card className="border-dashed border-2 p-5 flex flex-col items-center justify-center gap-2 bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer" onClick={() => setCreateOpen(true)}>
+                <div className="bg-background p-2.5 rounded-full shadow-sm"><Plus className="w-5 h-5 text-primary" /></div>
+                <div className="text-center">
+                  <h3 className="font-semibold">创建新租户</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">仅超级管理员可创建</p>
+                </div>
+              </Card>
+            )}
           </div>
         ) : (
           <div className="space-y-4">

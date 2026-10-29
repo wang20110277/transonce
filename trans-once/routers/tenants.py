@@ -147,6 +147,8 @@ def discover(q: str | None = Query(default=None), user: dict = Depends(get_curre
 
 @router.post("/tenants")
 def create_tenant(body: dict = Body(...), user: dict = Depends(get_current_user)):
+    if not user.get("is_super_admin"):
+        raise HTTPException(403, "只有超级管理员可以创建租户")
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "请输入租户名称")

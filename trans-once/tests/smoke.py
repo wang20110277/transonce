@@ -103,6 +103,9 @@ def main() -> int:
     fake = str(uuid.uuid4())
     status, _ = call("GET", f"/api/tenants/{fake}/dashboard", token=product["token"], expect=None)
     check("unknown tenant is rejected", status in (403, 404), f"status {status}")
+    # Tenant creation is super-admin-only; the call is rejected, nothing is created.
+    status, _ = call("POST", "/api/tenants", {"name": "smoke-禁用创建"}, token=product["token"], expect=None)
+    check("non-super-admin cannot create tenants", status == 403, f"status {status}")
 
     print("\n[dashboard & requirements]")
     _, dash = call("GET", f"/api/tenants/{tenant_id}/dashboard", token=admin["token"])
