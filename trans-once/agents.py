@@ -35,7 +35,44 @@ _agent_cwd: str | None = None
 
 
 def _child_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k in _AGENT_ENV_KEYS}
+    env = {k: v for k, v in os.environ.items() if k in _AGENT_ENV_KEYS}
+    # Claude 别名映射（如 sonnet→GLM-5.3）是模型名而非机密，透传可让子进程
+    # CLI 的模型解析与用户终端保持一致。
+    env.update(
+        {k: v for k, v in os.environ.items() if k.startswith("ANTHROPIC_DEFAULT_")}
+    )
+    return env
+
+
+def resolve_cli(provider: str) -> tuple[str | None, str | None]:
+    """解析本地 agent CLI 的绝对路径 → (路径, 需补充进 PATH 的目录)。
+
+    shutil.which 只看进程 PATH，而 claude/opencode 装在 nvm 的 bin 里——
+    后端可能由未加载 nvm 的环境启动（PATH 里没有它们），因此再兜底扫描
+    nvm 与常见安装位置，让解析与"后端由谁启动"无关。CLI 是 node 脚本，
+    兜底命中时把所在目录补进子进程 PATH，node 解释器才能被找到。
+    """
+    cli = {"claude": "claude", "opencode": "opencode"}.get(provider)
+    if not cli:
+        return None, None
+    hit = shutil.which(cli)
+    if hit:
+        return hit, None
+    candidates: list[str] = []
+    nvm_root = os.path.expanduser("~/.nvm/versions/node")
+    if os.path.isdir(nvm_root):
+        for ver in sorted(os.listdir(nvm_root), reverse=True):
+            candidates.append(os.path.join(nvm_root, ver, "bin", cli))
+    candidates += [
+        os.path.expanduser(f"~/.local/bin/{cli}"),
+        os.path.expanduser(f"~/bin/{cli}"),
+        f"/usr/local/bin/{cli}",
+        f"/opt/homebrew/bin/{cli}",
+    ]
+    for c in candidates:
+        if os.access(c, os.X_OK):
+            return c, os.path.dirname(c)
+    return None, None
 
 
 def _agent_workdir() -> str:
@@ -158,14 +195,18 @@ def run_agent_text(
         args = ["run"] + (["--model", model] if model else []) + [combined]
         stdin_text = None
     timeout = timeout_ms / 1000
+    bin_path, extra_dir = resolve_cli(p)
+    child_env = _child_env()
+    if extra_dir:
+        child_env["PATH"] = extra_dir + os.pathsep + child_env.get("PATH", "")
     proc = subprocess.Popen(
-        [p] + args,
+        [bin_path or p] + args,
         stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         cwd=cwd,
-        env=_child_env(),
+        env=child_env,
         start_new_session=True,
     )
     try:

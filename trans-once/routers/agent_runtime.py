@@ -5,12 +5,12 @@
 接受一个不会生效的值。
 """
 import os
-import shutil
 import subprocess
 import time
 
 from fastapi import APIRouter, Depends
 
+import agents
 from deps import get_current_user
 
 router = APIRouter(prefix="/api", tags=["agent-runtime"], dependencies=[Depends(get_current_user)])
@@ -27,13 +27,19 @@ _CLAUDE_ALIASES = ["sonnet", "opus", "haiku", "fable"]
 
 
 def _installed(cli: str) -> bool:
-    return shutil.which(cli) is not None
+    return agents.resolve_cli(cli)[0] is not None
 
 
 def _opencode_models() -> tuple[list[dict], str | None]:
+    bin_path, extra_dir = agents.resolve_cli("opencode")
+    if not bin_path:
+        return [], "本机未安装 opencode"
+    env = dict(os.environ)
+    if extra_dir:
+        env["PATH"] = extra_dir + os.pathsep + env.get("PATH", "")
     try:
         proc = subprocess.run(
-            ["opencode", "models"], capture_output=True, text=True, timeout=15
+            [bin_path, "models"], capture_output=True, text=True, timeout=15, env=env
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         return [], f"opencode models 执行失败：{e}"
