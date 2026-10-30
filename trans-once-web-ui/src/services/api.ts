@@ -233,13 +233,13 @@ export const api = {
 
   coderepos: {
     connections: (tid: string) => get<GitlabConnection[]>(`${T(tid)}/gitlab/connections`),
-    createConnection: (tid: string, body: { name: string; baseUrl: string; token?: string; mode: "live" | "demo"; insecureTls?: boolean }) =>
+    createConnection: (tid: string, body: { name: string; baseUrl: string; token: string; insecureTls?: boolean }) =>
       post<GitlabConnection>(`${T(tid)}/gitlab/connections`, body),
-    updateConnection: (tid: string, cid: string, body: Partial<{ name: string; baseUrl: string; token: string; mode: "live" | "demo"; insecureTls: boolean }>) =>
+    updateConnection: (tid: string, cid: string, body: Partial<{ name: string; baseUrl: string; token: string; insecureTls: boolean }>) =>
       patch<GitlabConnection>(`${T(tid)}/gitlab/connections/${cid}`, body),
     removeConnection: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/gitlab/connections/${cid}`),
     syncConnection: (tid: string, cid: string) =>
-      post<{ ok: boolean; count: number; source: string; connection: GitlabConnection }>(`${T(tid)}/gitlab/connections/${cid}/sync`),
+      post<{ ok: boolean; count: number; connection: GitlabConnection }>(`${T(tid)}/gitlab/connections/${cid}/sync`),
 
     repos: (tid: string, q?: string, connectionId?: string) =>
       get<GitRepo[]>(`${T(tid)}/repos${q || connectionId ? `?${[

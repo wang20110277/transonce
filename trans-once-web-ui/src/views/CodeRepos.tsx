@@ -57,7 +57,7 @@ export function CodeRepos() {
     setNotice(null);
     try {
       const res = await api.coderepos.syncConnection(tid, conn.id);
-      setNotice(`已从${res.source === "demo" ? "演示目录" : "GitLab"}同步 ${res.count} 个代码库`);
+      setNotice(`已从 GitLab 同步 ${res.count} 个代码库`);
       await refreshWorkspace();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -134,8 +134,7 @@ export function CodeRepos() {
       <div className="rounded-lg border bg-blue-50/60 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900 p-3 flex gap-2 text-xs text-blue-800 dark:text-blue-300">
         <ShieldAlert className="w-4 h-4 shrink-0" />
         <p>
-          访问令牌加密存储，接口只返回掩码。审批通过后平台会记录授权并提示仓库管理员在 GitLab 中开通对应角色；
-          演示模式的连接完全离线，仓库目录为确定性模拟数据。
+          访问令牌加密存储，接口只返回掩码。审批通过后平台会记录授权并提示仓库管理员在 GitLab 中开通对应角色。
         </p>
       </div>
 
@@ -161,7 +160,6 @@ export function CodeRepos() {
                     <div className="min-w-0">
                       <p className="font-semibold flex items-center gap-2 truncate">
                         {conn.name}
-                        <Pill tone={conn.mode === "demo" ? "amber" : "blue"}>{conn.mode === "demo" ? "演示" : "真实"}</Pill>
                         {conn.status === "error" && <Pill tone="rose">异常</Pill>}
                       </p>
                       <p className="text-[11px] text-muted-foreground truncate mt-0.5">
@@ -404,7 +402,6 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
   const [form, setForm] = useState({
     name: conn?.name ?? "",
     baseUrl: conn?.baseUrl ?? "",
-    mode: conn?.mode ?? "demo",
     token: "",
     insecureTls: conn?.insecureTls ?? false,
   });
@@ -418,11 +415,10 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
       const body = {
         name: form.name,
         baseUrl: form.baseUrl,
-        mode: form.mode as "live" | "demo",
-        ...(form.mode === "live" ? { insecureTls: form.insecureTls } : {}),
+        insecureTls: form.insecureTls,
       };
       if (conn) await api.coderepos.updateConnection(tenant.tenant.id, conn.id, { ...body, token: form.token || undefined });
-      else await api.coderepos.createConnection(tenant.tenant.id, { ...body, token: form.token || undefined });
+      else await api.coderepos.createConnection(tenant.tenant.id, { ...body, token: form.token });
       await onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -434,18 +430,9 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
   return (
     <Modal title={conn ? `编辑连接：${conn.name}` : "关联 GitLab"} onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-sm font-medium">连接名称</label>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1.5" placeholder="例如：公司 GitLab" />
-          </div>
-          <div>
-            <label className="text-sm font-medium">模式</label>
-            <Select value={form.mode} onChange={(v) => setForm({ ...form, mode: v as "live" | "demo" })} className="mt-1.5 w-full h-10">
-              <option value="demo">演示模式（离线模拟目录）</option>
-              <option value="live">真实 GitLab（API 同步）</option>
-            </Select>
-          </div>
+        <div>
+          <label className="text-sm font-medium">连接名称</label>
+          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1.5" placeholder="例如：公司 GitLab" />
         </div>
         <div>
           <label className="text-sm font-medium">GitLab 地址</label>
@@ -453,24 +440,22 @@ function ConnectionModal({ conn, onClose, onSaved }: { conn: GitlabConnection | 
         </div>
         <div>
           <label className="text-sm font-medium">
-            访问令牌 {form.mode === "live" && <span className="text-muted-foreground font-normal">（建议只读 read_api 权限）</span>}
+            访问令牌 <span className="text-muted-foreground font-normal">（建议只读 read_api 权限）</span>
           </label>
           <Input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} className="mt-1.5"
-            placeholder={conn ? (form.mode === "demo" ? "••••••（可选）" : `当前 ${conn.tokenMasked ?? "未配置"}，留空保持不变`) : form.mode === "demo" ? "演示模式无需令牌" : "加密存储，接口只返回掩码"} />
+            placeholder={conn ? `当前 ${conn.tokenMasked ?? "未配置"}，留空保持不变` : "加密存储，接口只返回掩码"} />
         </div>
-        {form.mode === "live" && (
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" checked={form.insecureTls} onChange={(e) => setForm({ ...form, insecureTls: e.target.checked })} className="accent-primary" />
-            自签名 / IP 证书（跳过 TLS 校验，仅影响对该地址的出站请求）
-          </label>
-        )}
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={form.insecureTls} onChange={(e) => setForm({ ...form, insecureTls: e.target.checked })} className="accent-primary" />
+          自签名 / IP 证书（跳过 TLS 校验，仅影响对该地址的出站请求）
+        </label>
         <p className="text-[11px] text-muted-foreground">
-          真实模式保存时会调用 GitLab <code>/user</code> 接口验证地址与令牌；演示模式完全离线，同步时生成一套确定的示例代码库。
+          保存时会调用 GitLab <code>/user</code> 接口验证地址与令牌，同步时拉取该账号可见的代码库列表。
         </p>
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end gap-2 border-t pt-3">
           <Button variant="ghost" onClick={onClose}>取消</Button>
-          <Button onClick={save} disabled={busy || !form.name.trim() || !form.baseUrl.trim()}>
+          <Button onClick={save} disabled={busy || !form.name.trim() || !form.baseUrl.trim() || (!conn && !form.token.trim())}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : "保存并测试"}
           </Button>
         </div>

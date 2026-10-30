@@ -31,7 +31,7 @@ AGENT_AGENTIC_TIMEOUT_MS = int(os.getenv("AGENT_AGENTIC_TIMEOUT_MS", "600000"))
 # local agent run works. The per-run workspace and env whitelist below remain
 # the containment boundary.
 AGENT_AGENTIC_DISALLOWED_TOOLS = os.getenv("AGENT_AGENTIC_DISALLOWED_TOOLS", "")
-# Outbound GitLab API timeout for live connections (demo mode never calls out).
+# Outbound GitLab API timeout for connection tests and syncs.
 GITLAB_TIMEOUT_SECONDS = int(os.getenv("GITLAB_TIMEOUT_SECONDS", "15"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")

@@ -17,7 +17,7 @@
 - **个人 Agent**：成员加入租户后自动获得专属 Agent，在统一对话框中以本人权限执行需求设计、拆解、编码、测试、部署与巡检。
 - **人工闸门**：环境 IP/密码由人工维护并加密存储；查看明文密钥需要 `secret.read`；生产发布需要 `deploy.production`。
 - **完整交付链**：会议提取、原型/架构 JSON、任务看板、Agent 运行记录、制品文件、流水线阶段与日志、部署记录、健康检查与告警。
-- **代码管理**：租户可关联 GitLab（真实 API 同步或离线演示目录；自签名/IP 证书的实例可按连接跳过 TLS 校验），成员浏览全部代码库——管理员令牌同步时自动改为全量可见（含未加入的 internal/private 项目），按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计；「项目与系统」的代码库可直接从同步目录选取，名称/地址/分支自动带出。
+- **代码管理**：租户可关联 GitLab（真实 API 同步；自签名/IP 证书的实例可按连接跳过 TLS 校验），成员浏览全部代码库——管理员令牌同步时自动改为全量可见（含未加入的 internal/private 项目），按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计；「项目与系统」的代码库可直接从同步目录选取，名称/地址/分支自动带出。
 - **可离线演示**：默认 `AGENT_PROVIDER=mock`，无需外部模型账号即可跑通全部动作；可切换 `claude` / `opencode`。
 
 ## 技术栈
@@ -51,7 +51,7 @@ trans-once/
   agents.py               # Provider 解析与 CLI 调用 / mock 回退
   mock_agent.py           # 离线确定性 Agent 产出
   routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat
-  gitlab_client.py        # GitLab REST 客户端（stdlib urllib）与演示目录生成
+  gitlab_client.py        # GitLab REST 客户端（stdlib urllib）
   migrations/versions/    # 0001 初始链路，0002 多租户 + RBAC + Agent + 全量平台表
   seed.py                 # 幂等初始化超级管理员（不再造演示数据）
   tests/smoke.py          # 端到端冒烟测试（stdlib）

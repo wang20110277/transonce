@@ -341,7 +341,7 @@ export type GitlabConnection = {
   tenantId?: string;
   name: string;
   baseUrl?: string | null;
-  mode: "live" | "demo";
+  mode: "live";
   status: "active" | "error";
   account?: string | null;
   insecureTls?: boolean;

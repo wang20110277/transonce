@@ -2,10 +2,10 @@
 per-repo access request/approval flow.
 
 Connections hold an encrypted PAT (`repo.manage`). Repos are cached rows
-synced from the GitLab API — or generated deterministically in demo mode —
-and every tenant member with the `repos` menu can browse them and request a
-GitLab-style role (guest/reporter/developer/maintainer). Approvals and
-revocations need `repo.approve`.
+synced from the GitLab API, and every tenant member with the `repos` menu
+can browse them and request a GitLab-style role
+(guest/reporter/developer/maintainer). Approvals and revocations need
+`repo.approve`.
 """
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from psycopg2.extras import Json
@@ -94,32 +94,27 @@ def create_connection(tenant_id: str, body: dict = Body(...), user: dict = Depen
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "请输入连接名称")
-    mode = body.get("mode") or "live"
-    if mode not in ("live", "demo"):
-        raise HTTPException(400, "无效的连接模式")
     token = (body.get("token") or "").strip()
+    if not token:
+        raise HTTPException(400, "需要 GitLab 访问令牌（建议只读 read_api 权限）")
     try:
         base_url = gitlab_client.normalize_base_url(body.get("baseUrl") or "")
     except gitlab_client.GitlabError as e:
         raise HTTPException(400, str(e)) from e
     insecure_tls = bool(body.get("insecureTls"))
-    account = None
-    if mode == "live":
-        if not token:
-            raise HTTPException(400, "真实模式需要 GitLab 访问令牌（建议只读 read_api 权限）")
-        try:
-            account = gitlab_client.fetch_current_user(base_url, token, insecure_tls).get("username")
-        except gitlab_client.GitlabError as e:
-            raise HTTPException(400, f"连接测试失败：{e}") from e
+    try:
+        account = gitlab_client.fetch_current_user(base_url, token, insecure_tls).get("username")
+    except gitlab_client.GitlabError as e:
+        raise HTTPException(400, f"连接测试失败：{e}") from e
     row = db.execute_returning(
         """INSERT INTO gitlab_connections
            (tenant_id, name, base_url, token_enc, account, mode, status, insecure_tls, created_by)
-           VALUES (%s,%s,%s,%s,%s,%s,'active',%s,%s) RETURNING *""",
-        (tenant_id, name, base_url, encrypt_secret(token), account, mode, insecure_tls, user["id"]),
+           VALUES (%s,%s,%s,%s,%s,'live','active',%s,%s) RETURNING *""",
+        (tenant_id, name, base_url, encrypt_secret(token), account, insecure_tls, user["id"]),
     )
     log_activity(
         ctx, "gitlab.connected",
-        {"name": name, "baseUrl": base_url, "mode": mode, "account": account},
+        {"name": name, "baseUrl": base_url, "account": account},
     )
     return serializers.gitlab_connection({**row, "repo_count": 0})
 
@@ -131,9 +126,6 @@ def update_connection(
     ctx = load_tenant_context(user, tenant_id, "repo.manage")
     conn = _connection_or_404(tenant_id, connection_id)
     name = (body.get("name") or "").strip() or conn["name"]
-    mode = body.get("mode") or conn["mode"]
-    if mode not in ("live", "demo"):
-        raise HTTPException(400, "无效的连接模式")
     try:
         base_url = gitlab_client.normalize_base_url(body.get("baseUrl") or conn["base_url"])
     except gitlab_client.GitlabError as e:
@@ -142,9 +134,9 @@ def update_connection(
     token_enc = encrypt_secret(token) if token else conn.get("token_enc")
     insecure_tls = bool(body.get("insecureTls", conn.get("insecure_tls")))
     account = conn.get("account")
-    if mode == "live" and not token_enc:
-        raise HTTPException(400, "真实模式需要 GitLab 访问令牌")
-    if mode == "live" and (token or base_url != conn["base_url"] or insecure_tls != bool(conn.get("insecure_tls"))):
+    if not token_enc:
+        raise HTTPException(400, "需要 GitLab 访问令牌")
+    if token or base_url != conn["base_url"] or insecure_tls != bool(conn.get("insecure_tls")):
         try:
             account = gitlab_client.fetch_current_user(
                 base_url, decrypt_secret(token_enc) or "", insecure_tls
@@ -153,15 +145,15 @@ def update_connection(
             raise HTTPException(400, f"连接测试失败：{e}") from e
     row = db.execute_returning(
         """UPDATE gitlab_connections
-           SET name=%s, base_url=%s, token_enc=%s, account=%s, mode=%s, insecure_tls=%s,
+           SET name=%s, base_url=%s, token_enc=%s, account=%s, insecure_tls=%s,
                status='active', last_error=NULL
            WHERE id=%s RETURNING *""",
-        (name, base_url, token_enc, account, mode, insecure_tls, connection_id),
+        (name, base_url, token_enc, account, insecure_tls, connection_id),
     )
     repo_count = db.fetch_one(
         "SELECT count(*) AS c FROM git_repos WHERE connection_id=%s", (connection_id,)
     )["c"]
-    log_activity(ctx, "gitlab.updated", {"name": name, "mode": mode})
+    log_activity(ctx, "gitlab.updated", {"name": name})
     return serializers.gitlab_connection({**row, "repo_count": repo_count})
 
 
@@ -178,35 +170,31 @@ def delete_connection(tenant_id: str, connection_id: str, user: dict = Depends(g
 def sync_connection(tenant_id: str, connection_id: str, user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "repo.manage")
     conn = _connection_or_404(tenant_id, connection_id)
-    if conn["mode"] == "demo":
-        projects, source = gitlab_client.demo_projects(), "demo"
-    else:
-        try:
-            token = decrypt_secret(conn.get("token_enc")) or ""
-            insecure = bool(conn.get("insecure_tls"))
-            # Instance admins get the full visible catalog (internal/private
-            # projects they are not members of included); members their own.
-            account = gitlab_client.fetch_current_user(conn["base_url"], token, insecure)
-            all_visible = bool(account.get("is_admin"))
-            projects = gitlab_client.fetch_projects(
-                conn["base_url"], token, insecure_tls=insecure, all_visible=all_visible
-            )
-            source = "gitlab"
-        except gitlab_client.GitlabError as e:
-            db.execute(
-                "UPDATE gitlab_connections SET status='error', last_error=%s WHERE id=%s",
-                (str(e), connection_id),
-            )
-            raise HTTPException(502, f"同步失败：{e}") from e
+    try:
+        token = decrypt_secret(conn.get("token_enc")) or ""
+        insecure = bool(conn.get("insecure_tls"))
+        # Instance admins get the full visible catalog (internal/private
+        # projects they are not members of included); members their own.
+        account = gitlab_client.fetch_current_user(conn["base_url"], token, insecure)
+        all_visible = bool(account.get("is_admin"))
+        projects = gitlab_client.fetch_projects(
+            conn["base_url"], token, insecure_tls=insecure, all_visible=all_visible
+        )
+    except gitlab_client.GitlabError as e:
+        db.execute(
+            "UPDATE gitlab_connections SET status='error', last_error=%s WHERE id=%s",
+            (str(e), connection_id),
+        )
+        raise HTTPException(502, f"同步失败：{e}") from e
     count = upsert_projects(conn, projects)
     row = db.execute_returning(
         """UPDATE gitlab_connections
            SET status='active', last_error=NULL, last_sync_at=now() WHERE id=%s RETURNING *""",
         (connection_id,),
     )
-    log_activity(ctx, "repos.synced", {"connection": conn["name"], "count": count, "source": source})
+    log_activity(ctx, "repos.synced", {"connection": conn["name"], "count": count})
     return {
-        "ok": True, "count": count, "source": source,
+        "ok": True, "count": count,
         "connection": serializers.gitlab_connection({**row, "repo_count": count}),
     }
 

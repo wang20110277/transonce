@@ -19,9 +19,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 API = os.getenv("API_BASE", "http://localhost:9005").rstrip("/")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
@@ -45,6 +47,62 @@ SAMPLE_NOTES = """时间：上午 10:00
 
 passed = 0
 failed: list[str] = []
+
+
+class _FakeGitlabHandler(BaseHTTPRequestHandler):
+    """Minimal GitLab API stand-in so the live-connection path is exercised
+    end-to-end (create validates via /user, sync lists /projects)."""
+
+    projects = [
+        {
+            "id": 101, "path": "smoke/retail-web", "name": "retail-web",
+            "namespace": {"path": "smoke"},
+            "path_with_namespace": "smoke/retail-web",
+            "web_url": "http://gitlab.smoke.local/smoke/retail-web",
+            "description": "冒烟 Web 前端", "default_branch": "main",
+            "visibility": "private", "archived": False, "last_activity_at": "2026-10-30T00:00:00Z",
+        },
+        {
+            "id": 102, "path": "smoke/retail-api", "name": "retail-api",
+            "namespace": {"path": "smoke"},
+            "path_with_namespace": "smoke/retail-api",
+            "web_url": "http://gitlab.smoke.local/smoke/retail-api",
+            "description": "冒烟 API 服务", "default_branch": "main",
+            "visibility": "internal", "archived": False, "last_activity_at": "2026-10-29T00:00:00Z",
+        },
+        {
+            "id": 103, "path": "smoke/platform-infra", "name": "platform-infra",
+            "namespace": {"path": "smoke"},
+            "path_with_namespace": "smoke/platform-infra",
+            "web_url": "http://gitlab.smoke.local/smoke/platform-infra",
+            "description": "冒烟基础设施", "default_branch": "master",
+            "visibility": "private", "archived": True, "last_activity_at": "2026-10-28T00:00:00Z",
+        },
+    ]
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server API
+        if self.path.startswith("/api/v4/user"):
+            body = {"id": 1, "username": "smoke-bot", "is_admin": False}
+        elif self.path.startswith("/api/v4/projects"):
+            body = self.projects
+        else:
+            self.send_error(404)
+            return
+        payload = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args) -> None:  # keep smoke output clean
+        pass
+
+
+def _start_fake_gitlab() -> str:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeGitlabHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}"
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -131,7 +189,7 @@ def bootstrap(tenant_slug: str) -> tuple[str, str, str]:
 
 
 def ensure_delivery_fixtures(tenant_id: str, admin_token: str) -> None:
-    """Environments, monitor, demo GitLab catalog, project chain — idempotent."""
+    """Environments, monitor, GitLab catalog, project chain — idempotent."""
     _, envs = call("GET", f"/api/tenants/{tenant_id}/environments", token=admin_token)
     by_name = {e["name"]: e for e in envs}
     if "冒烟测试环境" not in by_name:
@@ -166,7 +224,7 @@ def ensure_delivery_fixtures(tenant_id: str, admin_token: str) -> None:
     if not conns:
         _, conn = call(
             "POST", f"/api/tenants/{tenant_id}/gitlab/connections",
-            {"name": "冒烟 GitLab（演示）", "baseUrl": "https://gitlab.example.com", "mode": "demo"},
+            {"name": "冒烟 GitLab", "baseUrl": _start_fake_gitlab(), "token": "smoke-token"},
             token=admin_token,
         )
         call("POST", f"/api/tenants/{tenant_id}/gitlab/connections/{conn['id']}/sync", {}, token=admin_token)
@@ -347,7 +405,7 @@ def main() -> int:
     check("dev role sees repos (menu permission)", len(dev_repos) > 0)
     status, _ = call(
         "POST", f"/api/tenants/{tenant_id}/gitlab/connections",
-        {"name": "smoke", "baseUrl": "https://gitlab.invalid", "token": "t", "mode": "live"},
+        {"name": "smoke", "baseUrl": "https://gitlab.invalid", "token": "t"},
         token=product["token"], expect=None,
     )
     check("product cannot link gitlab", status == 403, f"status {status}")

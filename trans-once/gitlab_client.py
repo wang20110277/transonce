@@ -2,8 +2,7 @@
 
 Uses the standard library only (urllib) so the backend gains no dependency.
 Every call raises `GitlabError` with a human-readable message on network,
-auth or parse failures and returns plain dicts on success. `demo_projects()`
-backs the offline demo mode the same way mock_agent backs agent runs.
+auth or parse failures and returns plain dicts on success.
 """
 from __future__ import annotations
 
@@ -12,7 +11,6 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
 
 from config import GITLAB_TIMEOUT_SECONDS
 
@@ -121,36 +119,4 @@ def fetch_projects(
         out.extend(_normalize_project(p) for p in batch if isinstance(p, dict))
         if len(batch) < 100:
             break
-    return out
-
-
-# Offline demo catalog: same shape as fetch_projects output, deterministic
-# external ids so repeated syncs upsert instead of duplicating.
-_DEMO_PROJECTS = [
-    ("innovatech/retail-web", "全渠道零售 Web 前端", "main", "private"),
-    ("innovatech/retail-api", "零售业务 API 服务", "main", "private"),
-    ("innovatech/retail-mobile", "移动端 App（React Native）", "develop", "private"),
-    ("innovatech/design-system", "设计系统与组件库", "main", "internal"),
-    ("platform/infra-terraform", "基础设施即代码", "master", "private"),
-    ("platform/ci-templates", "CI 模板与流水线脚本", "main", "internal"),
-]
-
-
-def demo_projects() -> list[dict]:
-    now = datetime.now(timezone.utc)
-    out = []
-    for i, (path, description, branch, visibility) in enumerate(_DEMO_PROJECTS):
-        namespace, name = path.rsplit("/", 1)
-        out.append({
-            "external_id": f"demo-{i + 1}",
-            "path": path,
-            "name": name,
-            "namespace": namespace,
-            "web_url": f"https://gitlab.demo.example.com/{path}",
-            "description": description,
-            "default_branch": branch,
-            "visibility": visibility,
-            "archived": False,
-            "last_activity_at": (now - timedelta(days=i, hours=3)).isoformat(),
-        })
     return out
