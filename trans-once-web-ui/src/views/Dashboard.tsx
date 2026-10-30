@@ -27,7 +27,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: string) => void }) {
               <CalendarClock className="w-4 h-4 mr-2" /> 录入会议
             </Button>
             <Button size="sm" onClick={() => askAgent("根据当前项目状态，给我下一步研发建议和风险提示")}>
-              <Bot className="w-4 h-4 mr-2" /> 问我的 Agent
+              <Bot className="w-4 h-4 mr-2" /> 问智能体
             </Button>
           </>
         }
@@ -158,7 +158,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: string) => void }) {
               <Card className="p-5">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-semibold flex items-center gap-2"><Bot className="w-4 h-4" /> Agent 团队</h3>
-                  <Button variant="ghost" size="sm" onClick={() => onNavigate(can("team") ? "team" : "agents")}>{can("team") ? "管理" : "我的 Agent"}</Button>
+                  <Button variant="ghost" size="sm" onClick={() => onNavigate(can("team") ? "team" : "agents")}>{can("team") ? "管理" : "智能体"}</Button>
                 </div>
                 <div className="space-y-2">
                   {agents.slice(0, 4).map((a) => (

@@ -43,7 +43,7 @@ export function Pipelines() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="CI/CD 流水线"
+        title="持续集成"
         description="流水线由 Agent 按需求生成，也可以手工维护；每次运行都会记录阶段耗时与日志。"
         actions={
           <>

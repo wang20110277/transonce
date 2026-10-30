@@ -43,7 +43,7 @@ export function MyAgent() {
   if (!agent) {
     return (
       <div className="space-y-5">
-        <PageHeader title="我的 Agent" description="每位成员都有专属 Agent，以你的权限执行研发任务。" />
+        <PageHeader title="智能体" description="每位成员都有专属 Agent，以你的权限执行研发任务。" />
         <EmptyState icon={Bot} title="尚未创建专属 Agent" description="加入租户后系统会自动创建；如果缺失，请联系管理员重置。" />
       </div>
     );
@@ -83,7 +83,7 @@ export function MyAgent() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="我的 Agent"
+        title="智能体"
         description="Agent 以你的身份和权限工作：它能看到你能看到的数据，但永远无法读取环境明文密码或绕过生产发布审批。"
         actions={
           <>

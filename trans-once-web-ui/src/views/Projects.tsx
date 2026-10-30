@@ -77,7 +77,7 @@ export function Projects() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="项目与系统"
+        title="项目管理"
         description="以项目 → 系统 → 代码库的层级组织研发资产，需求、制品与流水线都可以关联到具体项目。"
         actions={<Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="w-4 h-4 mr-2" /> 新建项目</Button>}
       />

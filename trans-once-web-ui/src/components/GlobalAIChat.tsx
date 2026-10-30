@@ -169,7 +169,7 @@ export function GlobalAIChat() {
             <div className="flex items-center gap-2 px-4 py-3 border-b bg-gradient-to-r from-primary/5 to-violet-500/5 shrink-0">
               <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center"><Bot className="w-4 h-4" /></div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold truncate">{agent?.name ?? "我的 Agent"}</p>
+                <p className="text-sm font-semibold truncate">{agent?.name ?? "智能体"}</p>
                 <p className="text-[10px] text-muted-foreground flex items-center gap-1"><span className={`w-1.5 h-1.5 rounded-full ${loading ? "bg-amber-500 animate-pulse" : "bg-emerald-500"}`} />{loading ? "正在执行…" : "在线 · 以你的权限工作"}</p>
               </div>
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setMinimized((m) => !m)}>

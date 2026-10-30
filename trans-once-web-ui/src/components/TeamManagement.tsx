@@ -399,7 +399,7 @@ function AgentsTab({ detail, busy, guard }: { detail: any; busy: boolean; guard:
         <p className="text-sm text-muted-foreground">每个成员都有一个专属 Agent。Agent 负责执行研发链路工作，但只拥有该成员的权限。</p>
         {manage && (
           <Button variant="outline" size="sm" onClick={() => guard(async () => { await api.tenants.resetAgent(current.tenant.id); })}>
-            <RefreshCw className="w-4 h-4 mr-2" /> 重置我的 Agent
+            <RefreshCw className="w-4 h-4 mr-2" /> 重置智能体
           </Button>
         )}
       </div>

@@ -40,9 +40,9 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
   {
     group: "研发",
     items: [
-      { id: "projects", label: "项目与系统", icon: FolderKanban, perm: "projects" },
+      { id: "projects", label: "项目管理", icon: FolderKanban, perm: "projects" },
       { id: "meetings", label: "会议纪要", icon: CalendarClock, perm: "meetings" },
-      { id: "requirements", label: "需求与设计", icon: FileText, perm: "requirements" },
+      { id: "requirements", label: "需求管理", icon: FileText, perm: "requirements" },
       { id: "development", label: "研发管理", icon: ListChecks, perm: "development" },
       { id: "testing", label: "测试管理", icon: TestTube2, perm: "testing" },
     ],
@@ -51,8 +51,8 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
     group: "交付",
     items: [
       { id: "repos", label: "代码管理", icon: GitBranch, perm: "repos" },
+      { id: "pipelines", label: "持续集成", icon: Workflow, perm: "pipelines" },
       { id: "artifacts", label: "制品管理", icon: Package, perm: "artifacts" },
-      { id: "pipelines", label: "CI/CD 流水线", icon: Workflow, perm: "pipelines" },
       { id: "deployment", label: "部署管理", icon: Rocket, perm: "deployment" },
     ],
   },
@@ -67,17 +67,17 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
   {
     group: "协作",
     items: [
-      { id: "agents", label: "我的 Agent", icon: Bot, perm: "agents" },
+      { id: "agents", label: "智能体", icon: Bot, perm: "agents" },
       { id: "team", label: "团队管理", icon: Users, perm: "team" },
     ],
   },
 ];
 
 const TITLES: Record<ViewId, string> = {
-  dashboard: "工作台", projects: "项目与系统", meetings: "会议纪要", requirements: "需求与设计",
-  development: "研发管理", testing: "测试管理", repos: "代码管理", artifacts: "制品管理", pipelines: "CI/CD 流水线",
+  dashboard: "工作台", projects: "项目管理", meetings: "会议纪要", requirements: "需求管理",
+  development: "研发管理", testing: "测试管理", repos: "代码管理", artifacts: "制品管理", pipelines: "持续集成",
   deployment: "部署管理", environments: "环境配置", monitoring: "运维监控", alerts: "告警中心",
-  agents: "我的 Agent", team: "团队管理",
+  agents: "智能体", team: "团队管理",
 };
 
 export default function App() {
