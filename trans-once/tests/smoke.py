@@ -34,6 +34,8 @@ PRODUCT_EMAIL = os.getenv("PRODUCT_EMAIL", "smoke-product@transonce.local")
 PRODUCT_PASSWORD = os.getenv("PRODUCT_PASSWORD", "smoke-pass-123")
 DEV_EMAIL = os.getenv("DEV_EMAIL", "smoke-dev@transonce.local")
 DEV_PASSWORD = os.getenv("DEV_PASSWORD", "smoke-pass-123")
+JOIN_EMAIL = os.getenv("JOIN_EMAIL", "smoke-join@transonce.local")
+JOIN_PASSWORD = os.getenv("JOIN_PASSWORD", "smoke-pass-123")
 
 SAMPLE_NOTES = """时间：上午 10:00
 参会人：产品负责人、研发、测试、DevOps
@@ -292,6 +294,36 @@ def main() -> int:
     # Tenant creation is super-admin-only; the call is rejected, nothing is created.
     status, _ = call("POST", "/api/tenants", {"name": "smoke-禁用创建"}, token=product["token"], expect=None)
     check("non-super-admin cannot create tenants", status == 403, f"status {status}")
+
+    print("\n[join request flow]")
+    join_token = _ensure_user(JOIN_EMAIL, "冒烟加入", JOIN_PASSWORD)
+    _, found = call("GET", "/api/tenants/discover", token=join_token)
+    entry = next((i for i in found["items"] if i["tenant"]["slug"] == TENANT_SLUG), None)
+    check("smoke tenant discoverable", entry is not None)
+    if entry:
+        if entry["myRequestStatus"] != "pending":  # a pending request may remain from a previous run
+            _, req = call(
+                "POST", f"/api/tenants/{tenant_id}/join-requests",
+                {"message": "冒烟加入申请"}, token=join_token,
+            )
+            check("join request submitted", req.get("status") == "pending")
+        _, reqs = call("GET", f"/api/tenants/{tenant_id}/join-requests", token=admin["token"])
+        pending = next(
+            (r for r in reqs if r["email"] == JOIN_EMAIL and r["status"] == "pending"), None,
+        )
+        check("join request visible to approver", pending is not None)
+        if pending:
+            call("POST", f"/api/tenants/{tenant_id}/join-requests/{pending['id']}/reject", {}, token=admin["token"])
+            _, found2 = call("GET", "/api/tenants/discover", token=join_token)
+            after = next((i for i in found2["items"] if i["tenant"]["slug"] == TENANT_SLUG), None)
+            check("rejection surfaced as myRequestStatus", (after or {}).get("myRequestStatus") == "rejected")
+            # A rejection is a notice, not a dead end: the user can re-apply.
+            _, reapplied = call(
+                "POST", f"/api/tenants/{tenant_id}/join-requests",
+                {"message": "冒烟再次申请"}, token=join_token,
+            )
+            check("re-apply after rejection allowed", reapplied.get("status") == "pending")
+            # leave one pending request behind so re-runs exercise the same path
 
     print("\n[dashboard & requirements]")
     _, dash = call("GET", f"/api/tenants/{tenant_id}/dashboard", token=admin["token"])

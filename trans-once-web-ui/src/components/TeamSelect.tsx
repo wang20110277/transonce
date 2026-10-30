@@ -172,10 +172,19 @@ export function TeamSelect() {
                   </div>
                   {item.myRequestStatus === "pending" ? (
                     <Badge variant="outline" className="text-amber-600 border-amber-300"><Clock className="w-3 h-3 mr-1" />待审批</Badge>
-                  ) : item.myRequestStatus === "rejected" ? (
-                    <Badge variant="outline" className="text-muted-foreground">上次申请被拒绝</Badge>
                   ) : (
-                    <Button size="sm" onClick={() => { setSelected(item); setMessage(""); }}>申请加入</Button>
+                    <div className="flex flex-col items-end gap-1.5">
+                      {item.myRequestStatus === "rejected" && (
+                        <span className="text-[11px] text-muted-foreground">上次申请被拒绝，可修改说明后再次申请</span>
+                      )}
+                      <Button
+                        size="sm"
+                        variant={item.myRequestStatus === "rejected" ? "outline" : "default"}
+                        onClick={() => { setSelected(item); setMessage(""); }}
+                      >
+                        {item.myRequestStatus === "rejected" ? "再次申请" : "申请加入"}
+                      </Button>
+                    </div>
                   )}
                 </div>
               </Card>
