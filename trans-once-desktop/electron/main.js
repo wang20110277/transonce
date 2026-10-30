@@ -2,8 +2,9 @@
 // 思路：前端零改动 —— 通过自定义 app:// 协议加载 trans-once-web-ui 的
 // 构建产物（dist/），并把 /api、/asr 请求在主进程内代理到本地后端，
 // 对页面来说一切请求仍是同源相对路径。
-const {app, BrowserWindow, Menu, net, protocol, shell} = require('electron');
+const {app, BrowserWindow, Menu, ipcMain, net, protocol, shell} = require('electron');
 const {spawn} = require('node:child_process');
+const http = require('node:http');
 const {pathToFileURL} = require('node:url');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -128,6 +129,76 @@ function openExternal(url) {
 function isAllowedOrigin(url) {
   return url.startsWith('app://') || url.startsWith(DEV_URL);
 }
+
+// --- OAuth 本机回环登录（RFC 8252）-----------------------------------------
+// app:// 页面无法注册重定向 URI：主进程在 127.0.0.1 随机端口起一次性监听，
+// 用系统浏览器打开授权页，身份服务带着 code+state 跳回本机端口，主进程换取
+// 平台会话后回传渲染进程。后端 /start|callback 接受任意 http(s) 回调并签进
+// state，无需为此改造。
+
+const OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
+function loopbackPage(title, detail) {
+  return page(`<div style="text-align:center"><div style="font-size:40px">✅</div>
+<h2 style="font-size:18px;margin:12px 0 8px">${title}</h2>
+<p style="color:#a1a1aa;font-size:13px">${detail}</p></div>`);
+}
+
+async function apiJson(pathname, body) {
+  const res = await net.fetch(BACKEND + pathname, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `后端请求失败（${res.status}）`);
+  return data;
+}
+
+function waitForLoopbackCode(server, deadline) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('登录超时或已取消，请重试'));
+      server.close();
+    }, deadline - Date.now());
+    server.once('request', (req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1');
+      const code = url.searchParams.get('code');
+      const state = url.searchParams.get('state');
+      const error = url.searchParams.get('error_description') || url.searchParams.get('error');
+      clearTimeout(timer);
+      res.writeHead(200, {'content-type': 'text/html; charset=utf-8'});
+      res.end(error ? loopbackPage('未完成登录', '可关闭本页回到 TransOnce 重新发起。')
+                    : loopbackPage('登录成功', '请回到 TransOnce 应用，正在自动进入…'));
+      server.close();
+      if (error) reject(new Error(`登录失败：${error}`));
+      else if (code && state) resolve({code, state});
+      else reject(new Error('身份服务未返回授权码，请重试'));
+    });
+  });
+}
+
+async function oauthLogin(provider) {
+  if (provider !== 'microsoft' && provider !== 'oidc') {
+    throw new Error('未知的登录方式');
+  }
+  const server = http.createServer(); // 请求处理挂在 waitForLoopbackCode 的 once('request')
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const redirectUri = `http://127.0.0.1:${port}/callback`;
+  const waiting = waitForLoopbackCode(server, Date.now() + OAUTH_TIMEOUT_MS);
+  try {
+    const {url} = await apiJson(`/api/auth/${provider}/start`, {redirectUri});
+    await shell.openExternal(url);
+    const {code, state} = await waiting;
+    return await apiJson(`/api/auth/${provider}/callback`, {code, state});
+  } catch (err) {
+    server.close();
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+ipcMain.handle('oauth-login', (_event, provider) => oauthLogin(provider));
 
 function createWindow() {
   win = new BrowserWindow({

@@ -7,7 +7,7 @@ const MAX = 5;
 export type LoginHistoryEntry = {
   email: string;
   name: string;
-  provider: "password" | "microsoft";
+  provider: "password" | "microsoft" | "oidc";
   at: number;
 };
 

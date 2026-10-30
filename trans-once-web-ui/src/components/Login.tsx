@@ -3,22 +3,35 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Rocket, ShieldCheck, Mail, Lock, User, Loader2, X, History } from "lucide-react";
+import { Rocket, ShieldCheck, Mail, Lock, User, Loader2, X, History, KeyRound } from "lucide-react";
 import { motion } from "motion/react";
-import type { AuthConfig } from "../types";
-import { api } from "../services/api";
-import { login, loginWithMicrosoft, register } from "../lib/session";
-import { listLoginHistory, removeLoginHistory, type LoginHistoryEntry } from "../lib/loginHistory";
+import type { AuthConfig, AuthUser } from "../types";
+import { api, setToken } from "../services/api";
+import { login, loginWithMicrosoft, loginWithOidc, register } from "../lib/session";
+import { refreshSession } from "../lib/session";
+import { addLoginHistory, listLoginHistory, removeLoginHistory, type LoginHistoryEntry } from "../lib/loginHistory";
 
 // 微软登录回到的前端路由（需在 Azure 应用中以"SPA 重定向 URI"注册同名地址）。
 export const MICROSOFT_CALLBACK_PATH = "/login/microsoft";
+// 通用 OIDC 登录回调路由（在身份服务中注册同名重定向 URI）。
+export const OIDC_CALLBACK_PATH = "/login/oidc";
 
-// 未取到配置时按默认（密码登录开、微软关）渲染，配置错误在提交时由后端兜底。
+// 未取到配置时按默认（密码登录开、三方登录关）渲染，配置错误在提交时由后端兜底。
 const FALLBACK_CONFIG: AuthConfig = {
   passwordLoginEnabled: true,
   registrationEnabled: true,
   microsoftEnabled: false,
+  oidcEnabled: false,
+  oidcDisplayName: "",
 };
+
+// 桌面客户端（Electron preload 注入）提供的 OAuth 桥：app:// 页面无法注册
+// 重定向，由主进程走 RFC 8252 本机回环（系统浏览器授权后携授权码回跳）。
+type DesktopBridge = {
+  isDesktop: boolean;
+  oauthLogin?: (provider: "microsoft" | "oidc") => Promise<{ token: string; user: AuthUser }>;
+};
+const desktop = (window as { transonceDesktop?: DesktopBridge }).transonceDesktop;
 
 function MicrosoftLogo({ className }: { className?: string }) {
   return (
@@ -49,33 +62,36 @@ export function Login() {
     api.auth.config().then(setConfig).catch(() => setConfig(FALLBACK_CONFIG));
   }, []);
 
-  // 微软登录回调：授权码换会话后由 App 自动切走；URL 先清理避免刷新重放。
+  // 三方登录回调（浏览器）：授权码换会话后由 App 自动切走；URL 先清理避免刷新重放。
   useEffect(() => {
     const path = window.location.pathname.replace(/\/+$/, "");
-    if (!path.endsWith(MICROSOFT_CALLBACK_PATH)) return;
     const params = new URLSearchParams(window.location.search);
+    const isMicrosoft = path.endsWith(MICROSOFT_CALLBACK_PATH);
+    const isOidc = path.endsWith(OIDC_CALLBACK_PATH);
+    if (!isMicrosoft && !isOidc) return;
     const code = params.get("code");
     const state = params.get("state");
-    const msError = params.get("error_description") || params.get("error");
+    const providerError = params.get("error_description") || params.get("error");
     window.history.replaceState(null, "", "/");
     if (code && state) {
       setMsPending(true);
-      loginWithMicrosoft(code, state).catch((err) => {
+      const done = isMicrosoft ? loginWithMicrosoft(code, state) : loginWithOidc(code, state);
+      done.catch((err) => {
         setMsPending(false);
         setError(err instanceof Error ? err.message : String(err));
       });
     } else {
-      setError(msError ? `微软登录失败：${msError}` : "微软登录未返回授权码，请重试");
+      setError(providerError ? `登录失败：${providerError}` : "登录未返回授权码，请重试");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const showPassword = config.passwordLoginEnabled || adminLogin;
   const showRegister = config.passwordLoginEnabled && config.registrationEnabled;
-  // OAuth 重定向需要 http(s) 源；桌面端 app:// 协议下隐藏微软入口（仍可密码登录）。
-  const webContext = window.location.protocol === "http:" || window.location.protocol === "https:";
-  const msUnsupported = config.microsoftEnabled && !webContext;
-  const showMicrosoft = config.microsoftEnabled && webContext;
+  const showMicrosoft = config.microsoftEnabled;
+  const oidcLabel = config.oidcDisplayName?.trim() || "使用单点登录（OIDC）";
+  const showOidc = config.oidcEnabled;
+  const anySso = showMicrosoft || showOidc;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -91,10 +107,27 @@ export function Login() {
     }
   };
 
-  const startMicrosoft = async () => {
+  // 桌面端：主进程起本机回环监听并拉起系统浏览器；浏览器端：整页跳转授权。
+  const startProvider = async (provider: "microsoft" | "oidc") => {
     setError(null);
+    if (desktop?.oauthLogin) {
+      setMsPending(true);
+      try {
+        const res = await desktop.oauthLogin(provider);
+        setToken(res.token);
+        addLoginHistory({ email: res.user.email, name: res.user.name, provider });
+        await refreshSession();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setMsPending(false);
+      }
+      return;
+    }
     try {
-      const res = await api.auth.microsoftStart(`${window.location.origin}${MICROSOFT_CALLBACK_PATH}`);
+      const path = provider === "microsoft" ? MICROSOFT_CALLBACK_PATH : OIDC_CALLBACK_PATH;
+      const start = provider === "microsoft" ? api.auth.microsoftStart : api.auth.oidcStart;
+      const res = await start(`${window.location.origin}${path}`);
       window.location.href = res.url;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -102,8 +135,8 @@ export function Login() {
   };
 
   const pickHistory = (entry: LoginHistoryEntry) => {
-    if (entry.provider === "microsoft" && showMicrosoft) {
-      startMicrosoft();
+    if (entry.provider !== "password" && anySso) {
+      startProvider(entry.provider === "microsoft" ? "microsoft" : "oidc");
       return;
     }
     if (showPassword) {
@@ -128,8 +161,10 @@ export function Login() {
           {msPending ? (
             <div className="flex flex-col items-center gap-3 py-10 text-center">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
-              <p className="text-sm font-medium">正在完成微软登录…</p>
-              <p className="text-xs text-muted-foreground">正在验证你的微软账号并进入平台</p>
+              <p className="text-sm font-medium">正在完成登录…</p>
+              <p className="text-xs text-muted-foreground">
+                {desktop ? "请在弹出的浏览器窗口中完成授权，随后自动返回本应用" : "正在验证你的账号并进入平台"}
+              </p>
             </div>
           ) : (
             <>
@@ -149,29 +184,33 @@ export function Login() {
               )}
 
               {showMicrosoft && (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full h-11 text-base font-semibold"
-                    onClick={startMicrosoft}
-                  >
-                    <MicrosoftLogo className="w-4.5 h-4.5 mr-2" />
-                    使用微软账号登录
-                  </Button>
-                  {showPassword && (
-                    <div className="flex items-center gap-3 my-6">
-                      <div className="flex-1 border-t" />
-                      <span className="text-xs text-muted-foreground">或</span>
-                      <div className="flex-1 border-t" />
-                    </div>
-                  )}
-                </>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-11 text-base font-semibold"
+                  onClick={() => startProvider("microsoft")}
+                >
+                  <MicrosoftLogo className="w-4.5 h-4.5 mr-2" />
+                  使用微软账号登录
+                </Button>
               )}
-              {msUnsupported && (
-                <p className="text-xs text-muted-foreground text-center">
-                  微软登录需要通过浏览器访问（当前为桌面内置页面，仅支持密码登录）。
-                </p>
+              {showOidc && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={`w-full h-11 text-base font-semibold ${showMicrosoft ? "mt-3" : ""}`}
+                  onClick={() => startProvider("oidc")}
+                >
+                  <KeyRound className="w-4.5 h-4.5 mr-2" />
+                  {oidcLabel}
+                </Button>
+              )}
+              {anySso && showPassword && (
+                <div className="flex items-center gap-3 my-6">
+                  <div className="flex-1 border-t" />
+                  <span className="text-xs text-muted-foreground">或</span>
+                  <div className="flex-1 border-t" />
+                </div>
               )}
 
               {showPassword ? (
@@ -214,9 +253,9 @@ export function Login() {
               ) : (
                 <div className="space-y-3">
                   {error && <p className="text-sm text-destructive bg-destructive/10 rounded-md px-3 py-2">{error}</p>}
-                  <p className="text-xs text-muted-foreground text-center">
-                    平台已关闭密码登录，请使用微软账号登录。
-                  </p>
+                  {!anySso && (
+                    <p className="text-xs text-muted-foreground text-center">平台已关闭密码登录，请联系管理员开启一种登录方式。</p>
+                  )}
                   <button
                     type="button"
                     className="w-full text-xs text-primary hover:underline"
@@ -227,13 +266,13 @@ export function Login() {
                 </div>
               )}
 
-              {history.length > 0 && (showPassword || showMicrosoft) && (
+              {history.length > 0 && (showPassword || anySso) && (
                 <div className="mt-6 pt-4 border-t space-y-1.5">
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground ml-1 mb-1">
                     <History className="w-3.5 h-3.5" /> 近期登录账号（仅本机记录）
                   </p>
                   {history.map((entry) => {
-                    const clickable = (entry.provider === "microsoft" && showMicrosoft) || showPassword;
+                    const clickable = (entry.provider !== "password" && anySso) || showPassword;
                     return (
                       <div key={entry.email} className={`group flex items-center gap-2 rounded-md border bg-background/50 px-2.5 py-1.5 ${clickable ? "hover:bg-muted/60 cursor-pointer" : "opacity-50"}`} onClick={() => clickable && pickHistory(entry)}>
                         <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold shrink-0">
@@ -244,6 +283,7 @@ export function Login() {
                           <p className="text-[10px] text-muted-foreground truncate">{entry.email}</p>
                         </div>
                         {entry.provider === "microsoft" && <MicrosoftLogo className="w-3 h-3 shrink-0" />}
+                        {entry.provider === "oidc" && <KeyRound className="w-3 h-3 shrink-0 text-muted-foreground" />}
                         <button
                           type="button"
                           title="忘记此账号"

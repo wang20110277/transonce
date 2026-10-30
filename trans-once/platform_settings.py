@@ -2,8 +2,10 @@
 
 One JSONB row per key, merged over defaults on read so new switches work on
 databases migrated before the setting existed. Currently holds the auth/login
-switches and the Microsoft OAuth client config; the client secret is encrypted
-at rest with the platform SECRET_KEY (same scheme as environment passwords).
+switches plus two redirect-based identity providers — Microsoft and a generic
+OIDC provider (Keycloak / Casdoor / Authing / Google / ...). Client secrets are
+encrypted at rest with the platform SECRET_KEY (same scheme as environment
+passwords) and are write-only: they never leave the backend unmasked.
 """
 from typing import Any
 
@@ -14,27 +16,50 @@ from security import decrypt_secret, encrypt_secret, mask_secret
 
 AUTH_KEY = "auth"
 
+# Redirect-based providers share one shape; both keep their secret under
+# clientSecretEnc (write-only) in the stored row.
 DEFAULT_MICROSOFT = {
     "enabled": False,
     "tenantId": "common",
     "clientId": "",
-    # stored encrypted under clientSecretEnc; never returned in the clear
     "clientSecret": "",
 }
+
+DEFAULT_OIDC = {
+    "enabled": False,
+    "issuerUrl": "",
+    "clientId": "",
+    "clientSecret": "",
+    "displayName": "",  # 登录按钮文案；空 = 「使用单点登录（OIDC）」
+    "scope": "openid profile email",
+}
+
+PROVIDERS = {"microsoft": DEFAULT_MICROSOFT, "oidc": DEFAULT_OIDC}
 
 DEFAULT_AUTH_SETTINGS = {
     "passwordLoginEnabled": True,
     "registrationEnabled": True,
     "microsoft": DEFAULT_MICROSOFT,
+    "oidc": DEFAULT_OIDC,
+}
+
+# What a provider needs before it can be enabled (and advertised on the login
+# page). Checked on save so the switch never turns on half-configured.
+_PROVIDER_REQUIRED_FIELDS = {
+    "microsoft": ("clientId", "clientSecret"),
+    "oidc": ("issuerUrl", "clientId", "clientSecret"),
 }
 
 
 def _decrypt(row: dict | None) -> dict:
-    """Merge the stored row over the defaults, decrypting the MS secret."""
+    """Merge the stored row over the defaults, decrypting provider secrets."""
     stored = dict(row["value"]) if row and row.get("value") else {}
-    ms = {**DEFAULT_MICROSOFT, **(stored.pop("microsoft", {}) or {})}
-    ms["clientSecret"] = decrypt_secret(ms.pop("clientSecretEnc", None)) or ""
-    return {**DEFAULT_AUTH_SETTINGS, **stored, "microsoft": ms}
+    out = {k: v for k, v in stored.items() if k not in PROVIDERS}
+    for key, defaults in PROVIDERS.items():
+        block = {**defaults, **(stored.get(key) or {})}
+        block["clientSecret"] = decrypt_secret(block.pop("clientSecretEnc", None)) or ""
+        out[key] = block
+    return {**DEFAULT_AUTH_SETTINGS, **out}
 
 
 def get_auth_settings() -> dict:
@@ -47,34 +72,46 @@ def get_auth_settings() -> dict:
 def save_auth_settings(patch: dict[str, Any]) -> dict:
     """Validate + merge a partial update, upsert the row, return the new value.
 
-    `clientSecret` omitted → keep the stored secret (the UI sends nothing when
-    the admin leaves the field blank); non-empty → replace; empty string → clear."""
+    Provider `clientSecret` omitted → keep the stored secret (the UI sends
+    nothing when the admin leaves the field blank); non-empty → replace;
+    empty string → clear."""
     current = get_auth_settings()
     patch = dict(patch)
-    ms_patch = dict(patch.pop("microsoft", None) or {})
-    ms_patch.pop("clientSecretEnc", None)  # never accept a pre-encrypted value
+    provider_patches: dict[str, dict] = {}
+    for key in PROVIDERS:
+        provider_patches[key] = dict(patch.pop(key, None) or {})
+        provider_patches[key].pop("clientSecretEnc", None)  # never accept pre-encrypted
+
     next_settings = {**current, **patch}
 
-    ms = {**current["microsoft"]}
-    secret = ms_patch.get("clientSecret", None)
-    if secret is None:  # not provided → keep
-        pass
-    elif str(secret).strip() == "":
-        ms["clientSecret"] = ""
-    else:
-        ms["clientSecret"] = str(secret).strip()
-    ms_patch.pop("clientSecret", None)
-    ms.update(ms_patch)
-    if "enabled" in ms and ms["enabled"]:
-        if not ms.get("clientId") or not ms.get("clientSecret"):
-            raise ValueError("开启微软登录前，需要先填写 Client ID 和 Client Secret")
-    next_settings["microsoft"] = ms
+    for key, defaults in PROVIDERS.items():
+        block = {**(current.get(key) or defaults)}
+        p = provider_patches[key]
+        secret = p.get("clientSecret", None)
+        if secret is None:  # not provided → keep
+            pass
+        elif str(secret).strip() == "":
+            block["clientSecret"] = ""
+        else:
+            block["clientSecret"] = str(secret).strip()
+        p.pop("clientSecret", None)
+        block.update(p)
+        if block.get("enabled"):
+            missing = [
+                f for f in _PROVIDER_REQUIRED_FIELDS[key] if not block.get(f)
+            ]
+            if missing:
+                label = "微软登录" if key == "microsoft" else "OIDC 登录"
+                raise ValueError(f"开启{label}前，需要先配置 {' / '.join(missing)}")
+        next_settings[key] = block
 
-    stored = {k: v for k, v in next_settings.items() if k != "microsoft"}
-    stored["microsoft"] = {
-        **{k: v for k, v in ms.items() if k != "clientSecret"},
-        "clientSecretEnc": encrypt_secret(ms["clientSecret"]) or None,
-    }
+    stored = {k: v for k, v in next_settings.items() if k not in PROVIDERS}
+    for key, block in PROVIDERS.items():
+        merged = next_settings[key]
+        stored[key] = {
+            **{k: v for k, v in merged.items() if k != "clientSecret"},
+            "clientSecretEnc": encrypt_secret(merged["clientSecret"]) or None,
+        }
     db.execute(
         """INSERT INTO platform_settings (key, value, updated_at)
            VALUES (%s, %s, now())
@@ -84,12 +121,19 @@ def save_auth_settings(patch: dict[str, Any]) -> dict:
     return next_settings
 
 
+def _provider_ready(settings: dict, key: str) -> bool:
+    block = settings.get(key) or {}
+    return all(
+        bool(block.get(f)) for f in _PROVIDER_REQUIRED_FIELDS[key]
+    ) and bool(block.get("enabled"))
+
+
 def microsoft_ready(settings: dict) -> bool:
-    """The Microsoft button only shows when the flow can actually complete."""
-    ms = settings.get("microsoft") or {}
-    return bool(
-        ms.get("enabled") and ms.get("clientId") and ms.get("clientSecret")
-    )
+    return _provider_ready(settings, "microsoft")
+
+
+def oidc_ready(settings: dict) -> bool:
+    return _provider_ready(settings, "oidc")
 
 
 def public_auth_config(settings: dict) -> dict:
@@ -98,20 +142,24 @@ def public_auth_config(settings: dict) -> dict:
         "passwordLoginEnabled": bool(settings.get("passwordLoginEnabled")),
         "registrationEnabled": bool(settings.get("registrationEnabled")),
         "microsoftEnabled": microsoft_ready(settings),
+        "oidcEnabled": oidc_ready(settings),
+        "oidcDisplayName": (settings.get("oidc") or {}).get("displayName") or "",
     }
 
 
 def admin_auth_settings(settings: dict) -> dict:
-    """Full settings for the super-admin UI; secret masked, never plaintext."""
-    ms = settings.get("microsoft") or {}
+    """Full settings for the super-admin UI; secrets masked, never plaintext."""
+
+    def masked_block(key: str) -> dict:
+        block = settings.get(key) or {}
+        out = {k: v for k, v in block.items() if k != "clientSecret"}
+        out["hasClientSecret"] = bool(block.get("clientSecret"))
+        out["clientSecretMasked"] = mask_secret(block.get("clientSecret"))
+        return out
+
     return {
         "passwordLoginEnabled": bool(settings.get("passwordLoginEnabled")),
         "registrationEnabled": bool(settings.get("registrationEnabled")),
-        "microsoft": {
-            "enabled": bool(ms.get("enabled")),
-            "tenantId": ms.get("tenantId") or "common",
-            "clientId": ms.get("clientId") or "",
-            "hasClientSecret": bool(ms.get("clientSecret")),
-            "clientSecretMasked": mask_secret(ms.get("clientSecret")),
-        },
+        "microsoft": masked_block("microsoft"),
+        "oidc": masked_block("oidc"),
     }

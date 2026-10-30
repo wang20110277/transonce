@@ -44,6 +44,7 @@ function SwitchRow({
 export function PlatformSettings({ onClose }: { onClose: () => void }) {
   const [settings, setSettings] = useState<AuthSettings | null>(null);
   const [secret, setSecret] = useState("");
+  const [oidcSecret, setOidcSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -58,6 +59,8 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
     setSettings((s) => (s ? { ...s, ...p } : s));
   const patchMs = (p: Partial<AuthSettings["microsoft"]>) =>
     setSettings((s) => (s ? { ...s, microsoft: { ...s.microsoft, ...p } } : s));
+  const patchOidc = (p: Partial<AuthSettings["oidc"]>) =>
+    setSettings((s) => (s ? { ...s, oidc: { ...s.oidc, ...p } } : s));
 
   const save = async () => {
     if (!settings) return;
@@ -65,7 +68,12 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
     setError(null);
     setToast(null);
     try {
-      const body: { passwordLoginEnabled: boolean; registrationEnabled: boolean; microsoft: Record<string, unknown> } = {
+      const body: {
+        passwordLoginEnabled: boolean;
+        registrationEnabled: boolean;
+        microsoft: Record<string, unknown>;
+        oidc: Record<string, unknown>;
+      } = {
         passwordLoginEnabled: settings.passwordLoginEnabled,
         registrationEnabled: settings.registrationEnabled,
         microsoft: {
@@ -73,11 +81,20 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
           tenantId: settings.microsoft.tenantId.trim() || "common",
           clientId: settings.microsoft.clientId.trim(),
         },
+        oidc: {
+          enabled: settings.oidc.enabled,
+          issuerUrl: settings.oidc.issuerUrl.trim().replace(/\/+$/, ""),
+          clientId: settings.oidc.clientId.trim(),
+          displayName: settings.oidc.displayName.trim(),
+          scope: settings.oidc.scope.trim() || "openid profile email",
+        },
       };
       if (secret.trim() !== "") body.microsoft.clientSecret = secret.trim();
+      if (oidcSecret.trim() !== "") body.oidc.clientSecret = oidcSecret.trim();
       const next = await api.auth.updateAuthSettings(body);
       setSettings(next);
       setSecret("");
+      setOidcSecret("");
       setToast("登录设置已保存，立即生效");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -89,6 +106,9 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
   const msConfigured = !!settings?.microsoft.clientId && settings?.microsoft.hasClientSecret;
   // 开关在配齐 Client ID + Secret 前保持锁定（后端同样拒绝未配置即开启）。
   const msToggleLocked = !msConfigured && !secret.trim();
+  const oidcConfigured =
+    !!settings?.oidc.issuerUrl && !!settings?.oidc.clientId && settings?.oidc.hasClientSecret;
+  const oidcToggleLocked = !oidcConfigured && !oidcSecret.trim();
   // 桌面端 app:// 不是可注册的回调地址，提示改用浏览器地址。
   const webOrigin =
     window.location.protocol === "http:" || window.location.protocol === "https:"
@@ -110,7 +130,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
             <p className="text-sm font-semibold">登录方式</p>
             <SwitchRow
               title="密码登录"
-              description="关闭后仅超级管理员仍可用邮箱密码登录（防止误锁），其他用户只能走微软登录。"
+              description="关闭后仅超级管理员仍可用邮箱密码登录（防止误锁），其他用户只能走三方登录。"
               checked={settings.passwordLoginEnabled}
               onChange={(v) => patch({ passwordLoginEnabled: v })}
             />
@@ -195,10 +215,97 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
+          <div className="space-y-2.5">
+            <p className="text-sm font-semibold">第三方登录（通用 OIDC）</p>
+            <SwitchRow
+              title="启用 OIDC 登录"
+              description={oidcToggleLocked
+                ? "先在下方填好 Issuer 地址、Client ID 与 Client Secret，此开关才会解锁。"
+                : "对接任意 OpenID Connect 身份服务（Keycloak / Casdoor / Authing / Okta / Google…），按邮箱匹配账号，不存在时自动注册。"}
+              checked={settings.oidc.enabled}
+              onChange={(v) => patchOidc({ enabled: v })}
+              disabled={oidcToggleLocked}
+            />
+            {oidcToggleLocked && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                还缺少身份服务信息：填好 Issuer / Client ID / Client Secret 后开关自动解锁。
+              </p>
+            )}
+            <div className="rounded-lg border bg-background/50 px-3.5 py-3 space-y-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Issuer 地址</label>
+                <Input
+                  value={settings.oidc.issuerUrl}
+                  onChange={(e) => patchOidc({ issuerUrl: e.target.value })}
+                  placeholder="例如 https://sso.example.com/realms/main"
+                />
+                <p className="text-xs text-muted-foreground">
+                  身份服务的 Issuer；平台自动读取其 /.well-known/openid-configuration，无需手填端点。内网 http 地址亦可。
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Client ID（客户端 ID）</label>
+                <Input
+                  value={settings.oidc.clientId}
+                  onChange={(e) => patchOidc({ clientId: e.target.value })}
+                  placeholder="身份服务中注册的应用 Client ID"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Client Secret（客户端密钥）</label>
+                <Input
+                  type="password"
+                  value={oidcSecret}
+                  onChange={(e) => setOidcSecret(e.target.value)}
+                  placeholder={settings.oidc.hasClientSecret ? `已保存（${settings.oidc.clientSecretMasked ?? "••••"}），留空不修改` : "输入新的密钥值"}
+                  autoComplete="new-password"
+                />
+                <p className="text-xs text-muted-foreground">加密存储；提交时留空表示保留已保存的密钥。</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">按钮显示名称</label>
+                  <Input
+                    value={settings.oidc.displayName}
+                    onChange={(e) => patchOidc({ displayName: e.target.value })}
+                    placeholder="使用 SSO 登录"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Scope</label>
+                  <Input
+                    value={settings.oidc.scope}
+                    onChange={(e) => patchOidc({ scope: e.target.value })}
+                    placeholder="openid profile email"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1 rounded-md bg-muted/60 px-3 py-2">
+                <p className="text-xs font-medium">回调地址（重定向 URI）</p>
+                {webOrigin ? (
+                  <code className="text-xs text-primary break-all">{webOrigin}/login/oidc</code>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    当前在桌面客户端。浏览器端回调为 平台地址 + <code className="text-xs">/login/oidc</code>（例如
+                    <code className="text-xs">http://localhost:3002/login/oidc</code>）；桌面端登录走本机回环，无需注册。
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  在身份服务中把该地址加入应用的 Redirect URI。
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between gap-2 pt-1">
-            {settings.microsoft.enabled ? (
-              <Badge variant="secondary" className={msConfigured ? "bg-emerald-50 text-emerald-700 border-emerald-200" : ""}>
-                微软登录{msConfigured ? "已就绪" : "待配置"}
+            {settings.microsoft.enabled || settings.oidc.enabled ? (
+              <Badge variant="secondary" className={msConfigured || oidcConfigured ? "bg-emerald-50 text-emerald-700 border-emerald-200" : ""}>
+                {settings.microsoft.enabled && !settings.oidc.enabled
+                  ? `微软登录${msConfigured ? "已就绪" : "待配置"}`
+                  : !settings.microsoft.enabled && settings.oidc.enabled
+                    ? `OIDC 登录${oidcConfigured ? "已就绪" : "待配置"}`
+                    : `微软/OIDC ${msConfigured && oidcConfigured ? "已就绪" : "待配置"}`}
               </Badge>
             ) : <span />}
             <div className="flex gap-2">

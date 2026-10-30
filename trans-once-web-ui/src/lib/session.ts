@@ -113,6 +113,15 @@ export async function loginWithMicrosoft(code: string, state: string): Promise<v
   await refreshSession();
 }
 
+// 通用 OIDC 登录回调：与微软同套路，authProvider=oidc。
+export async function loginWithOidc(code: string, state: string): Promise<void> {
+  const res = await api.auth.oidcCallback(code, state);
+  setToken(res.token);
+  addLoginHistory({ email: res.user.email, name: res.user.name, provider: "oidc" });
+  set({ user: res.user, status: "loading" });
+  await refreshSession();
+}
+
 export function selectTenant(tenant: TenantSummary) {
   localStorage.setItem(TENANT_KEY, tenant.tenant.id);
   set({ currentTenant: tenant });

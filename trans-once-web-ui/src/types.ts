@@ -7,7 +7,7 @@ export type AuthUser = {
   avatar?: string | null;
   isSuperAdmin: boolean;
   status?: string;
-  authProvider?: "password" | "microsoft";
+  authProvider?: "password" | "microsoft" | "oidc";
   createdAt?: string;
 };
 
@@ -16,6 +16,8 @@ export type AuthConfig = {
   passwordLoginEnabled: boolean;
   registrationEnabled: boolean;
   microsoftEnabled: boolean;
+  oidcEnabled: boolean;
+  oidcDisplayName: string;
 };
 
 // 超级管理员的登录设置（GET/PUT /api/auth/settings）；secret 只回掩码。
@@ -28,6 +30,15 @@ export type AuthSettings = {
     clientId: string;
     hasClientSecret: boolean;
     clientSecretMasked?: string | null;
+  };
+  oidc: {
+    enabled: boolean;
+    issuerUrl: string;
+    clientId: string;
+    hasClientSecret: boolean;
+    clientSecretMasked?: string | null;
+    displayName: string;
+    scope: string;
   };
 };
 

@@ -15,7 +15,7 @@
 - **多租户**：用户可搜索团队并申请加入；租户管理员可直接添加成员；超级管理员可管理所有租户。所有业务数据按 `tenant_id` 隔离。
 - **租户级 RBAC**：每个租户维护自己的角色与权限，菜单权限与敏感操作权限分离（成员管理、角色管理、密钥查看、生产发布、监控维护）。
 - **个人 Agent**：成员加入租户后自动获得专属 Agent，在统一对话框中以本人权限执行需求设计、拆解、编码、测试、部署与巡检。
-- **登录治理**：支持微软认证登录（Microsoft Entra ID / Azure AD，OAuth 2.0 授权码流）；超级管理员可随时开关密码登录、自助注册与微软登录。微软登录按邮箱匹配账号，不存在则自动注册（无密码账号，可在个人设置中补设密码）；关闭密码登录后仅超级管理员保留密码登录逃生口，防止误锁。登录页本地记录近期登录账号，点击即可回填。
+- **登录治理**：支持微软认证登录（Microsoft Entra ID / Azure AD）与**通用 OIDC 单点登录**（Keycloak / Casdoor / Authing / Okta / Google 等，自动发现端点，配置 Issuer + Client 即用）；超级管理员可随时开关密码登录、自助注册与各三方登录。三方登录按邮箱匹配账号，不存在则自动注册（无密码账号，可在个人设置中补设密码）；关闭密码登录后仅超级管理员保留密码登录逃生口，防止误锁。登录页本地记录近期登录账号，点击即可回填；桌面客户端经 RFC 8252 本机回环在系统浏览器完成三方登录授权。
 - **人工闸门**：环境 IP/密码由人工维护并加密存储；查看明文密钥需要 `secret.read`；生产发布需要 `deploy.production`。
 - **完整交付链**：会议提取、原型/架构 JSON、任务看板、Agent 运行记录、制品文件、流水线阶段与日志、部署记录、健康检查与告警。
 - **代码管理**：租户可关联 GitLab（真实 API 同步；自签名/IP 证书的实例可按连接跳过 TLS 校验），成员浏览全部代码库——管理员令牌同步时自动改为全量可见（含未加入的 internal/private 项目），按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计；「项目与系统」的代码库可直接从同步目录选取，名称/地址/分支自动带出。
@@ -175,7 +175,7 @@ npm run lint
 npm run build
 ```
 
-`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录、个人设置自助、登录方式配置开关与微软登录 URL 构建，共 85 项检查，且不会创建或删除业务实体。`trans-once/tests/microsoft_flow.py` 离线（不联网）验证微软登录回调：state 校验、id_token 校验、按邮箱自动注册/复用账号与无密码账号补设密码。
+`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录、个人设置自助、登录方式配置开关、微软登录 URL 构建与通用 OIDC 全链路（内置迷你 IdP：发现→授权→回调→自动注册），共 92 项检查，且不会创建或删除业务实体。`trans-once/tests/microsoft_flow.py` 离线（不联网）验证微软登录回调：state 校验、id_token 校验、按邮箱自动注册/复用账号与无密码账号补设密码。
 
 ## 主要 API
 
@@ -183,7 +183,7 @@ npm run build
 
 | 模块 | 代表接口 |
 |---|---|
-| 认证 | `POST /api/auth/login`、`POST /api/auth/register`、`GET /api/auth/me`、`GET /api/auth/config`、`GET/PUT /api/auth/settings`（超管）、`POST /api/auth/microsoft/start|callback` |
+| 认证 | `POST /api/auth/login`、`POST /api/auth/register`、`GET /api/auth/me`、`GET /api/auth/config`、`GET/PUT /api/auth/settings`（超管）、`POST /api/auth/microsoft/start|callback`、`POST /api/auth/oidc/start|callback` |
 | 租户 | `GET /api/tenants`、`GET /api/tenants/discover`、`POST /api/tenants`、`GET /api/tenants/{id}` |
 | 成员/角色 | `POST /members`、`PATCH /members/{uid}`、`GET/POST /roles`、加入申请审批 |
 | 会议/需求 | `/meetings`、`/meetings/{id}/extract`、`/requirements`、`/requirements/{id}/design|breakdown|code|test|autopilot` |

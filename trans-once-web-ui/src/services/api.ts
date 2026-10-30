@@ -82,12 +82,20 @@ export const api = {
     config: () => get<AuthConfig>("/auth/config"),
     authSettings: () => get<AuthSettings>("/auth/settings"),
     // clientSecret 省略 = 保留已存值；空串 = 清除；非空 = 替换。
-    updateAuthSettings: (body: Partial<{ passwordLoginEnabled: boolean; registrationEnabled: boolean; microsoft: Partial<AuthSettings["microsoft"]> & { clientSecret?: string } }>) =>
-      put<AuthSettings>("/auth/settings", body),
+    updateAuthSettings: (body: Partial<{
+      passwordLoginEnabled: boolean;
+      registrationEnabled: boolean;
+      microsoft: Partial<AuthSettings["microsoft"]> & { clientSecret?: string };
+      oidc: Partial<AuthSettings["oidc"]> & { clientSecret?: string };
+    }>) => put<AuthSettings>("/auth/settings", body),
     microsoftStart: (redirectUri: string) =>
       post<{ url: string }>("/auth/microsoft/start", { redirectUri }),
     microsoftCallback: (code: string, state: string) =>
       post<{ token: string; user: AuthUser }>("/auth/microsoft/callback", { code, state }),
+    oidcStart: (redirectUri: string) =>
+      post<{ url: string }>("/auth/oidc/start", { redirectUri }),
+    oidcCallback: (code: string, state: string) =>
+      post<{ token: string; user: AuthUser }>("/auth/oidc/callback", { code, state }),
     permissions: () => get<Permission[]>("/permissions"),
   },
 

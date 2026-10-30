@@ -16,11 +16,14 @@ value before moving on.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -107,6 +110,85 @@ def _start_fake_gitlab() -> str:
     return f"http://127.0.0.1:{server.server_port}"
 
 
+class _FakeOidcHandler(BaseHTTPRequestHandler):
+    """Minimal OpenID Connect provider so the generic-OIDC login path runs
+    end-to-end (discovery → authorize → token) without an external IdP."""
+
+    CLIENT_ID = "smoke-oidc-client"
+    EMAIL = "smoke-oidc@transonce.local"
+    _nonce = ""
+
+    def log_message(self, *args) -> None:  # keep smoke output clean
+        pass
+
+    def _json(self, obj, status = 200):
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @property
+    def _base(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def do_GET(self) -> None:  # noqa: N802 (http.server naming)
+        url = urllib.parse.urlsplit(self.path)
+        if url.path == "/.well-known/openid-configuration":
+            self._json({
+                "issuer": self._base,
+                "authorization_endpoint": f"{self._base}/authorize",
+                "token_endpoint": f"{self._base}/token",
+                "response_types_supported": ["code"],
+            })
+            return
+        if url.path == "/authorize":
+            q = urllib.parse.parse_qs(url.query)
+            _FakeOidcHandler._nonce = q.get("nonce", [""])[0]
+            loc = f"{q['redirect_uri'][0]}?code=smoke-oidc-code&state={q['state'][0]}"
+            self.send_response(302)
+            self.send_header("location", loc)
+            self.end_headers()
+            return
+        self._json({"error": "not_found"}, 404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        url = urllib.parse.urlsplit(self.path)
+        if url.path != "/token":
+            self._json({"error": "not_found"}, 404)
+            return
+        form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("content-length", 0))).decode())
+        if form.get("grant_type") != ["authorization_code"] or form.get("code") != ["smoke-oidc-code"]:
+            self._json({"error": "invalid_grant", "error_description": "bad code"}, 400)
+            return
+
+        def b64e(obj: dict) -> str:
+            return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+        claims = {
+            "iss": self._base,
+            "aud": _FakeOidcHandler.CLIENT_ID,
+            "exp": int(time.time()) + 300,
+            "nonce": _FakeOidcHandler._nonce,
+            "email": _FakeOidcHandler.EMAIL,
+            "name": "OIDC 冒烟用户",
+        }
+        id_token = f"{b64e({'alg': 'none', 'typ': 'JWT'})}.{b64e(claims)}."
+        self._json({"access_token": "at", "token_type": "Bearer", "id_token": id_token})
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802
+        return None
+
+
+def _start_fake_oidc() -> str:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeOidcHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}"
+
+
 def check(name: str, condition: bool, detail: str = "") -> None:
     global passed
     if condition:
@@ -154,7 +236,9 @@ def _ensure_user(email: str, name: str, password: str) -> str:
     )
     if status == 200:
         return out["token"]
-    if status == 409:  # already registered on a previous run
+    if status in (409, 403):
+        # 409 = registered on a previous run; 403 = registration disabled on
+        # this platform — the fixture must already exist, log in instead.
         return login(email, password)["token"]
     raise AssertionError(f"register {email} -> {status}: {out}")
 
@@ -630,6 +714,79 @@ def main() -> int:
             after_cfg["passwordLoginEnabled"] == orig["passwordLoginEnabled"]
             and after_cfg["registrationEnabled"] == orig["registrationEnabled"]
         ))
+
+    print("\n[generic oidc login]")
+    oidc_base = _start_fake_oidc()
+    _, orig_all = call("GET", "/api/auth/settings", token=admin["token"])
+    try:
+        if not orig_all["oidc"]["hasClientSecret"]:
+            _, saved = call("PUT", "/api/auth/settings", {
+                "oidc": {"enabled": True, "issuerUrl": oidc_base,
+                         "clientId": "smoke-oidc-client", "clientSecret": "smoke-oidc-secret",
+                         "displayName": "冒烟 SSO"},
+            }, token=admin["token"])
+            check("oidc settings stored", (
+                saved["oidc"]["issuerUrl"] == oidc_base and saved["oidc"]["hasClientSecret"] is True
+            ))
+            _, cfg3 = call("GET", "/api/auth/config")
+            check("oidc login advertised", cfg3["oidcEnabled"] is True and cfg3["oidcDisplayName"] == "冒烟 SSO")
+
+            # start → authorize (302 to the client redirect_uri) → extract code/state
+            _, started = call("POST", "/api/auth/oidc/start",
+                              {"redirectUri": "http://127.0.0.1:39998/callback"})
+            check("oidc authorize url built (loopback redirect accepted)", (
+                started["url"].startswith(oidc_base + "/authorize")
+                and "client_id=smoke-oidc-client" in started["url"]
+                and "nonce=" in started["url"]
+            ))
+            no_redirect = urllib.request.build_opener(_NoRedirect)
+            try:
+                no_redirect.open(started["url"], timeout=10)
+                location = ""
+            except urllib.error.HTTPError as exc:
+                location = exc.headers.get("location", "")
+            check("oidc provider redirected back with code+state", "code=smoke-oidc-code" in location and "state=" in location, location[:120])
+            back = urllib.parse.parse_qs(urllib.parse.urlsplit(location).query)
+
+            _, logged_in = call("POST", "/api/auth/oidc/callback",
+                                {"code": back["code"][0], "state": back["state"][0]})
+            check("oidc login issues a platform token", bool(logged_in.get("token")))
+            check("oidc auto-registered by email", (
+                logged_in["user"]["email"] == _FakeOidcHandler.EMAIL
+                and logged_in["user"].get("authProvider") == "oidc"
+            ))
+            status, _ = call("POST", "/api/auth/oidc/callback",
+                             {"code": "x", "state": "garbage"}, expect=None)
+            check("oidc callback rejects bad state", status == 400, f"status {status}")
+            status, _ = call("POST", "/api/auth/oidc/start",
+                             {"redirectUri": "ftp://nope"}, expect=None)
+            check("oidc start rejects non-http redirect", status == 400, f"status {status}")
+        else:
+            print("  · oidc client already configured — skipping mutation checks")
+    finally:
+        restore = {
+            "passwordLoginEnabled": orig_all["passwordLoginEnabled"],
+            "registrationEnabled": orig_all["registrationEnabled"],
+            "microsoft": {
+                "enabled": orig_all["microsoft"]["enabled"],
+                "tenantId": orig_all["microsoft"]["tenantId"],
+                "clientId": orig_all["microsoft"]["clientId"],
+            },
+            "oidc": {
+                "enabled": orig_all["oidc"]["enabled"],
+                "issuerUrl": orig_all["oidc"]["issuerUrl"],
+                "clientId": orig_all["oidc"]["clientId"],
+                "displayName": orig_all["oidc"].get("displayName", ""),
+                "scope": orig_all["oidc"].get("scope", ""),
+            },
+        }
+        if not orig_all["microsoft"]["hasClientSecret"]:
+            restore["microsoft"]["clientSecret"] = ""
+        if not orig_all["oidc"]["hasClientSecret"]:
+            restore["oidc"]["clientSecret"] = ""
+        call("PUT", "/api/auth/settings", restore, token=admin["token"])
+        # The auto-registered smoke-oidc@ account stays as an idempotent fixture
+        # (re-runs reuse it via find-or-create, mirroring the other fixtures).
 
     total = passed + len(failed)
     print(f"\n{'─' * 48}\n{passed}/{total} checks passed")
