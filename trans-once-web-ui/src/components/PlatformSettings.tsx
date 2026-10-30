@@ -84,6 +84,13 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
   };
 
   const msConfigured = !!settings?.microsoft.clientId && settings?.microsoft.hasClientSecret;
+  // 开关在配齐 Client ID + Secret 前保持锁定（后端同样拒绝未配置即开启）。
+  const msToggleLocked = !msConfigured && !secret.trim();
+  // 桌面端 app:// 不是可注册的回调地址，提示改用浏览器地址。
+  const webOrigin =
+    window.location.protocol === "http:" || window.location.protocol === "https:"
+      ? window.location.origin
+      : "";
 
   return (
     <Modal title="平台登录设置" onClose={onClose}>
@@ -116,18 +123,29 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
             <p className="text-sm font-semibold">微软认证登录（Microsoft Entra ID / Azure AD）</p>
             <SwitchRow
               title="启用微软登录"
-              description="用户使用微软账号授权登录；按邮箱匹配账号，不存在时自动注册。"
+              description={msToggleLocked
+                ? "先在下方填好 Client ID 与 Client Secret，此开关才会解锁（后端也会拒绝无配置开启）。"
+                : "用户使用微软账号授权登录；按邮箱匹配账号，不存在时自动注册。"}
               checked={settings.microsoft.enabled}
               onChange={(v) => patchMs({ enabled: v })}
-              disabled={!msConfigured && !secret.trim()}
+              disabled={msToggleLocked}
             />
-            {settings.microsoft.enabled && !msConfigured && !secret.trim() && (
+            {msToggleLocked && (
               <p className="flex items-start gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                 <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                开启前需要先填写 Client ID 与 Client Secret（下方）。
+                还缺少 Azure 应用信息：按下方步骤注册应用并把 Client ID / Client Secret 填入，开关即自动解锁。
               </p>
             )}
             <div className="rounded-lg border bg-background/50 px-3.5 py-3 space-y-3">
+              <div className="space-y-1 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">还没有 Azure 应用？四步获取：</p>
+                <ol className="list-decimal list-inside space-y-0.5">
+                  <li>portal.azure.com → Microsoft Entra ID → 应用注册 → 新注册</li>
+                  <li>重定向 URI 平台选「单页应用程序(SPA)」，地址填下方回调地址</li>
+                  <li>概述页复制「应用程序(客户端)ID」「目录(租户)ID」</li>
+                  <li>证书和密码 → 新客户端密码 → 复制「值」（只显示一次）填入下方 Client Secret</li>
+                </ol>
+              </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Tenant ID</label>
                 <Input
@@ -158,9 +176,17 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
               </div>
               <div className="space-y-1 rounded-md bg-muted/60 px-3 py-2">
                 <p className="text-xs font-medium">回调地址（重定向 URI）</p>
-                <code className="text-xs text-primary break-all">{window.location.origin}/login/microsoft</code>
+                {webOrigin ? (
+                  <code className="text-xs text-primary break-all">{webOrigin}/login/microsoft</code>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    当前在桌面客户端（app:// 地址不可注册）。请用浏览器打开平台，以浏览器地址栏的地址加上
+                    <code className="text-xs">/login/microsoft</code> 作为回调地址（例如
+                    <code className="text-xs">http://localhost:3002/login/microsoft</code>）。
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  请在 Azure「应用注册 → 身份验证 → SPA」中添加为重定向 URI（平台类型选“单页应用程序”）。
+                  请在 Azure「应用注册 → 身份验证」中添加为重定向 URI（平台类型选“单页应用程序”）。
                 </p>
               </div>
             </div>
