@@ -1,17 +1,18 @@
 """End-to-end smoke tests against a running TransOnce API.
 
-Usage (backend must be running on :9005 and seeded):
+Usage (backend must be running on :9005):
 
     cd trans-once && python3 tests/smoke.py
     API_BASE=http://localhost:9005 python3 tests/smoke.py
 
-The suite is intentionally non-destructive: it only reads data, reveals a
-masked secret (which writes an audit log), runs a monitor health check,
-creates/deletes one throwaway conversation, and settles one repo access
-request (idempotent across re-runs). No tenant, requirement, task or
-artifact is created or removed. The profile self-service section renames
-the dev account and round-trips its email/password, restoring each value
-before moving on.
+The suite is self-provisioning: there is no demo seed data any more, so it
+creates (once, idempotently) a dedicated tenant, two member accounts and the
+fixtures the checks need. Beyond that it stays non-destructive: it only reads
+data, reveals a masked secret (which writes an audit log), runs a monitor
+health check, creates/deletes one throwaway conversation, and settles one repo
+access request (idempotent across re-runs). The profile self-service section
+renames the dev account and round-trips its email/password, restoring each
+value before moving on.
 """
 from __future__ import annotations
 
@@ -25,10 +26,22 @@ import uuid
 API = os.getenv("API_BASE", "http://localhost:9005").rstrip("/")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-PRODUCT_EMAIL = os.getenv("PRODUCT_EMAIL", "product@transonce.local")
-PRODUCT_PASSWORD = os.getenv("PRODUCT_PASSWORD", "demo123")
-DEV_EMAIL = os.getenv("DEV_EMAIL", "dev@transonce.local")
-DEV_PASSWORD = os.getenv("DEV_PASSWORD", "demo123")
+# Fixture accounts owned by this suite (kept across runs for idempotency).
+TENANT_SLUG = os.getenv("SMOKE_TENANT_SLUG", "smoke")
+PRODUCT_EMAIL = os.getenv("PRODUCT_EMAIL", "smoke-product@transonce.local")
+PRODUCT_PASSWORD = os.getenv("PRODUCT_PASSWORD", "smoke-pass-123")
+DEV_EMAIL = os.getenv("DEV_EMAIL", "smoke-dev@transonce.local")
+DEV_PASSWORD = os.getenv("DEV_PASSWORD", "smoke-pass-123")
+
+SAMPLE_NOTES = """时间：上午 10:00
+参会人：产品负责人、研发、测试、DevOps
+
+1. 产品负责人：本期目标是让会议纪要可以直接驱动需求提取，减少手工整理。
+2. 研发：需求要能关联来源会议，支持验收标准和优先级，并且保留 Agent 运行记录。
+3. 测试：每条需求必须有可验证的验收标准，空纪要和纯闲聊要有兜底提示。
+4. DevOps：需求完成后要能一键生成制品、跑流水线、部署到测试环境，并自动纳入健康监控。
+5. 决议：先打通会议→需求→设计→研发→测试→部署→监控的闭环，生产发布保留人工审批。
+"""
 
 passed = 0
 failed: list[str] = []
@@ -73,6 +86,118 @@ def login(email: str, password: str) -> dict:
     return out
 
 
+def _ensure_user(email: str, name: str, password: str) -> str:
+    """Register the fixture account once; return a fresh token either way."""
+    status, out = call(
+        "POST", "/api/auth/register",
+        {"email": email, "name": name, "password": password}, expect=None,
+    )
+    if status == 200:
+        return out["token"]
+    if status == 409:  # already registered on a previous run
+        return login(email, password)["token"]
+    raise AssertionError(f"register {email} -> {status}: {out}")
+
+
+def bootstrap(tenant_slug: str) -> tuple[str, str, str]:
+    """Create (once) the smoke tenant, its member accounts and base fixtures.
+
+    Returns (tenant_id, product_token, dev_token).
+    """
+    admin = login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    _, mine = call("GET", "/api/tenants", token=admin["token"])
+    entry = next((t for t in mine["items"] if t["tenant"]["slug"] == tenant_slug), None)
+    if entry is None:
+        _, entry = call(
+            "POST", "/api/tenants",
+            {"name": "冒烟测试租户", "slug": tenant_slug}, token=admin["token"],
+        )
+    tenant_id = entry["tenant"]["id"]
+    product_token = _ensure_user(PRODUCT_EMAIL, "冒烟产品", PRODUCT_PASSWORD)
+    dev_token = _ensure_user(DEV_EMAIL, "冒烟研发", DEV_PASSWORD)
+    _, roles = call("GET", f"/api/tenants/{tenant_id}/roles", token=admin["token"])
+    role_ids = {r["name"]: r["id"] for r in roles}
+    for email, role_name in [
+        (PRODUCT_EMAIL, "产品负责人"), (DEV_EMAIL, "研发工程师"),
+    ]:
+        status, _ = call(
+            "POST", f"/api/tenants/{tenant_id}/members",
+            {"email": email, "roleId": role_ids[role_name]},
+            token=admin["token"], expect=None,
+        )
+        if status not in (200, 409):  # 409 = already a member from a previous run
+            raise AssertionError(f"add member {email} -> {status}")
+    return tenant_id, product_token, dev_token
+
+
+def ensure_delivery_fixtures(tenant_id: str, admin_token: str) -> None:
+    """Environments, monitor, demo GitLab catalog, project chain — idempotent."""
+    _, envs = call("GET", f"/api/tenants/{tenant_id}/environments", token=admin_token)
+    by_name = {e["name"]: e for e in envs}
+    if "冒烟测试环境" not in by_name:
+        _, row = call(
+            "POST", f"/api/tenants/{tenant_id}/environments",
+            {
+                "name": "冒烟测试环境", "kind": "test",
+                "baseUrl": "http://localhost:9005/api/health", "ip": "127.0.0.1",
+                "username": "deploy", "password": "smoke-pass-123",
+            },
+            token=admin_token,
+        )
+        by_name[row["name"]] = row
+    if "冒烟生产环境" not in by_name:
+        call(
+            "POST", f"/api/tenants/{tenant_id}/environments",
+            {
+                "name": "冒烟生产环境", "kind": "production",
+                "baseUrl": "https://smoke.transonce.local", "ip": "10.0.0.10",
+                "username": "deploy", "password": "smoke-prod-123",
+            },
+            token=admin_token,
+        )
+    _, monitors = call("GET", f"/api/tenants/{tenant_id}/monitors", token=admin_token)
+    if not monitors:
+        call(
+            "POST", f"/api/tenants/{tenant_id}/monitors",
+            {"environmentId": by_name["冒烟测试环境"]["id"], "name": "冒烟健康检查"},
+            token=admin_token,
+        )
+    _, conns = call("GET", f"/api/tenants/{tenant_id}/gitlab/connections", token=admin_token)
+    if not conns:
+        _, conn = call(
+            "POST", f"/api/tenants/{tenant_id}/gitlab/connections",
+            {"name": "冒烟 GitLab（演示）", "baseUrl": "https://gitlab.example.com", "mode": "demo"},
+            token=admin_token,
+        )
+        call("POST", f"/api/tenants/{tenant_id}/gitlab/connections/{conn['id']}/sync", {}, token=admin_token)
+    _, projects = call("GET", f"/api/tenants/{tenant_id}/projects", token=admin_token)
+    if not projects:
+        _, project = call(
+            "POST", f"/api/tenants/{tenant_id}/projects",
+            {"name": "冒烟项目", "description": "冒烟测试自建项目"}, token=admin_token,
+        )
+        call(
+            "POST", f"/api/tenants/{tenant_id}/projects/{project['id']}/systems",
+            {"name": "冒烟系统", "description": "FastAPI 冒烟服务"}, token=admin_token,
+        )
+    _, meetings = call("GET", f"/api/tenants/{tenant_id}/meetings", token=admin_token)
+    if not meetings:
+        _, meeting = call(
+            "POST", f"/api/tenants/{tenant_id}/meetings",
+            {"title": "冒烟：会议纪要驱动研发闭环评审", "rawNotes": SAMPLE_NOTES},
+            token=admin_token,
+        )
+        call("POST", f"/api/tenants/{tenant_id}/meetings/{meeting['id']}/extract?save=true", {}, token=admin_token)
+    _, requirements = call("GET", f"/api/tenants/{tenant_id}/requirements", token=admin_token)
+    if requirements:
+        first = requirements[0]
+        if not (first.get("prototype") and first.get("architecture")):
+            call("POST", f"/api/tenants/{tenant_id}/requirements/{first['id']}/design", {}, token=admin_token)
+        _, artifacts = call("GET", f"/api/tenants/{tenant_id}/artifacts", token=admin_token)
+        if not artifacts:
+            call("POST", f"/api/tenants/{tenant_id}/requirements/{first['id']}/code", {}, token=admin_token)
+
+
 def main() -> int:
     print(f"\nTransOnce smoke test → {API}\n")
 
@@ -81,15 +206,16 @@ def main() -> int:
     check("health endpoint ok", health.get("ok") is True)
     check("agent provider reported", bool(health.get("provider")))
 
-    print("\n[auth & tenancy]")
+    print("\n[bootstrap fixtures]")
     admin = login(ADMIN_EMAIL, ADMIN_PASSWORD)
-    product = login(PRODUCT_EMAIL, PRODUCT_PASSWORD)
     check("admin login", bool(admin.get("token")))
-    check("product login", bool(product.get("token")))
     check("admin is super admin", admin["user"].get("isSuperAdmin") is True)
-
+    tenant_id, product_token, dev_token = bootstrap(TENANT_SLUG)
+    product = {"token": product_token}
+    ensure_delivery_fixtures(tenant_id, admin["token"])
     _, me = call("GET", "/api/auth/me", token=product["token"])
     memberships = me.get("memberships") or []
+    check("smoke tenant ready", any(m["tenant"]["id"] == tenant_id for m in memberships))
     check("product has one active membership", len(memberships) == 1)
     membership = memberships[0]
     perms = membership.get("permissions") or []
@@ -99,7 +225,7 @@ def main() -> int:
     check("product cannot deploy", "deployment" not in perms)
     check("product cannot manage environments", "environments" not in perms)
 
-    tenant_id = membership["tenant"]["id"]
+    print("\n[auth & tenancy]")
     _, tenants = call("GET", "/api/tenants", token=product["token"])
     check("tenant list returns memberships", any(t["tenant"]["id"] == tenant_id for t in tenants["items"]))
     fake = str(uuid.uuid4())
@@ -112,25 +238,21 @@ def main() -> int:
     print("\n[dashboard & requirements]")
     _, dash = call("GET", f"/api/tenants/{tenant_id}/dashboard", token=admin["token"])
     counts = dash.get("counts") or {}
-    # Demo data may have been edited/deleted by operators; only the seeded
-    # install is expected to carry the full meeting→requirement chain.
     check("dashboard returns counts", isinstance(counts.get("requirements"), int))
     _, requirements = call("GET", f"/api/tenants/{tenant_id}/requirements", token=admin["token"])
-    if requirements:
-        if counts.get("requirements"):
-            check("dashboard counts requirements", int(counts["requirements"]) == len(requirements))
-        designed = next((r for r in requirements if r.get("prototype") and r.get("architecture")), None)
-        check("a designed requirement exists", designed is not None)
-        if designed:
-            try:
-                proto = json.loads(designed["prototype"])
-                check("prototype is valid JSON", isinstance(proto, dict) and bool(proto.get("summary")))
-            except (TypeError, json.JSONDecodeError):
-                check("prototype is valid JSON", False, "JSON.parse failed")
-            arch = designed.get("architecture") or {}
-            check("architecture has components", bool(arch.get("components")))
-    else:
-        print("  · demo requirements absent (operator data); requirement checks skipped")
+    check("fixture requirements exist", len(requirements) > 0)
+    if counts.get("requirements"):
+        check("dashboard counts requirements", int(counts["requirements"]) == len(requirements))
+    designed = next((r for r in requirements if r.get("prototype") and r.get("architecture")), None)
+    check("a designed requirement exists", designed is not None)
+    if designed:
+        try:
+            proto = json.loads(designed["prototype"])
+            check("prototype is valid JSON", isinstance(proto, dict) and bool(proto.get("summary")))
+        except (TypeError, json.JSONDecodeError):
+            check("prototype is valid JSON", False, "JSON.parse failed")
+        arch = designed.get("architecture") or {}
+        check("architecture has components", bool(arch.get("components")))
 
     print("\n[permission boundaries]")
     for path, label in [
@@ -216,43 +338,29 @@ def main() -> int:
     _, repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=product["token"])
     check("repos visible to product", len(repos) > 0)
     check("repos carry per-user access state", all("myAccess" in r and "myRequest" in r for r in repos))
-    # The offline demo connection (and its seeded grant/request) may have been
-    # deleted by operators; fall back to any repo product has no access to.
+    # Pick a repo product has no access to for the request→approve→revoke flow.
     target = next(
-        (
-            r for r in repos
-            if not r.get("myAccess") and not r.get("myRequest")
-            and r.get("path") != "innovatech/retail-web"
-        ),
+        (r for r in repos if not r.get("myAccess") and not r.get("myRequest")),
         None,
     )
-    dev = login(DEV_EMAIL, DEV_PASSWORD)
-    _, dev_repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=dev["token"])
-    check("dev role sees repos (menu permission migrated)", len(dev_repos) > 0)
-    dev_api = next((r for r in dev_repos if r.get("path") == "innovatech/retail-api"), None)
-    if dev_api:
-        check("seeded developer grant annotated", (dev_api or {}).get("myAccess", {}).get("role") == "developer")
-    else:
-        print("  · demo connection removed by operator; seeded-grant check skipped")
+    _, dev_repos = call("GET", f"/api/tenants/{tenant_id}/repos", token=dev_token)
+    check("dev role sees repos (menu permission)", len(dev_repos) > 0)
     status, _ = call(
         "POST", f"/api/tenants/{tenant_id}/gitlab/connections",
         {"name": "smoke", "baseUrl": "https://gitlab.invalid", "token": "t", "mode": "live"},
         token=product["token"], expect=None,
     )
     check("product cannot link gitlab", status == 403, f"status {status}")
-    _, reqs = call("GET", f"/api/tenants/{tenant_id}/repo-access-requests", token=admin["token"])
-    check("access requests listable by approver", isinstance(reqs, list) and len(reqs) >= 1)
-    if not target:
-        print("  · no requestable repo for product; request flow skipped")
-    pending = next(
-        (r for r in reqs if r.get("status") == "pending" and target and r.get("repoId") == target["id"]),
-        None,
-    )
-    if not pending and target:
+    pending = None
+    if target:
         _, pending = call(
             "POST", f"/api/tenants/{tenant_id}/repos/{target['id']}/access-requests",
             {"role": "developer", "reason": "smoke run"}, token=product["token"],
         )
+    _, reqs = call("GET", f"/api/tenants/{tenant_id}/repo-access-requests", token=admin["token"])
+    check("access requests listable by approver", isinstance(reqs, list) and len(reqs) >= 1)
+    if not target:
+        print("  · no requestable repo for product; request flow skipped")
     if pending:
         _, approved = call(
             "POST", f"/api/tenants/{tenant_id}/repo-access-requests/{pending['id']}/approve",

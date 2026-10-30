@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import agents
 import db
-from config import CORS_ORIGINS, SEED_DEMO
+from config import CORS_ORIGINS, SEED_ADMIN
 from routers import agent_runtime, agentchat, auth, coderepos, devops, pipeline, projects, tenants
 
 logging.basicConfig(level=logging.INFO)
@@ -28,12 +28,12 @@ async def lifespan(app: FastAPI):
         db.recover_stale_runs()
     except Exception as e:
         log.warning("stale run recovery skipped: %s", e)
-    if SEED_DEMO:
+    if SEED_ADMIN:
         try:
             import seed
             seed.seed()
         except Exception as e:  # keep the API bootable; surface the reason
-            log.warning("seed skipped/failed: %s", e)
+            log.warning("admin bootstrap skipped/failed: %s", e)
     yield
 
 

@@ -87,8 +87,7 @@ export function Login() {
           </form>
 
           <div className="mt-6 pt-5 border-t text-center text-xs text-muted-foreground space-y-1">
-            <p>演示账号：admin@transonce.local / admin123（超级管理员）</p>
-            <p>product@transonce.local / demo123（产品负责人）　dev@transonce.local / demo123（研发）</p>
+            <p>初始账号：admin@transonce.local / admin123（超级管理员）</p>
           </div>
         </Card>
 

@@ -36,7 +36,8 @@ GITLAB_TIMEOUT_SECONDS = int(os.getenv("GITLAB_TIMEOUT_SECONDS", "15"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@transonce.local")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_NAME = os.getenv("ADMIN_NAME", "超级管理员")
-SEED_DEMO = os.getenv("SEED_DEMO", "true").lower() == "true"
+# Bootstrap the super admin from ADMIN_* above on startup (idempotent).
+SEED_ADMIN = os.getenv("SEED_ADMIN", "true").lower() == "true"
 CORS_ORIGINS = [
     o.strip()
     for o in os.getenv(

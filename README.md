@@ -53,7 +53,7 @@ trans-once/
   routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat
   gitlab_client.py        # GitLab REST 客户端（stdlib urllib）与演示目录生成
   migrations/versions/    # 0001 初始链路，0002 多租户 + RBAC + Agent + 全量平台表
-  seed.py                 # 幂等演示数据
+  seed.py                 # 幂等初始化超级管理员（不再造演示数据）
   tests/smoke.py          # 端到端冒烟测试（stdlib）
 trans-once-desktop/
   electron/main.js        # Electron 主进程：app:// 协议加载 dist/ 并代理 /api、/asr
@@ -91,7 +91,7 @@ cd ..
 
 后端端口固定在 `9005`（`trans-once/run.sh` 显式传入 `--port 9005`），前端代理也指向该端口。
 
-启动时会自动执行 `seed.py`：创建超级管理员、演示租户「创新数智研发组」、角色、成员、项目、会议、需求、Agent、环境、制品、流水线、监控等数据。种子以租户 slug `innovatech` 幂等，重复启动不会重复插入。
+启动时会自动执行 `seed.py`：只创建超级管理员（以 `ADMIN_EMAIL` 幂等，重复启动不会重复插入），不生成任何演示数据；租户、成员、项目等全部由用户自行创建。旧版本种子写入的演示租户与演示账号由迁移 `0007` 清除。
 
 ### 3. 前端
 
@@ -115,15 +115,13 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 
 客户端通过自定义 `app://` 协议加载前端构建产物，并把 `/api`、`/asr` 代理到本地后端（前端零改动）。启动时等待后端健康检查通过，未就绪则停留在引导页自动重试。详见 `trans-once-desktop/README.md`（含开发模式、冒烟验证与 DMG 打包）。
 
-## 演示账号
+## 初始账号
 
-| 账号 | 密码 | 身份 | 可见范围 |
+| 账号 | 密码 | 身份 | 说明 |
 |---|---|---|---|
-| `admin@transonce.local` | `admin123` | 超级管理员 / 租户管理员 | 全部页面、全部租户 |
-| `product@transonce.local` | `demo123` | 产品负责人 | 工作台、项目、会议、需求、研发、测试、制品、我的 Agent |
-| `dev@transonce.local` | `demo123` | 研发工程师 | 在工作台/需求/测试/制品基础上增加代码管理与 CI/CD，不含环境、部署、监控、告警、团队 |
+| `admin@transonce.local` | `admin123` | 超级管理员 | 由 `seed.py` 幂等创建（`ADMIN_EMAIL` / `ADMIN_PASSWORD` 可改），登录后可创建租户并邀请成员 |
 
-也可以用注册页创建新账号，然后在「团队选择」中搜索租户并提交加入申请，由租户管理员审批。
+其余账号用注册页创建，然后在「团队选择」中搜索租户并提交加入申请，由租户管理员审批（或由管理员在团队管理中直接添加）。
 
 ## 权限模型
 
