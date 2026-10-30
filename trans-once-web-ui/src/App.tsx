@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, FolderKanban, CalendarClock, FileText, ListChecks, TestTube2,
   Package, Workflow, Rocket, Server, Activity, Bell, Bot, Users, LogOut, GitBranch,
-  Building2, ChevronDown, Menu, X, Moon, Sun, Sparkles, ArrowLeftRight, ShieldAlert, UserCog,
+  Building2, ChevronDown, Menu, X, Moon, Sun, Sparkles, ArrowLeftRight, ShieldAlert, UserCog, KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Login } from "./components/Login";
 import { TeamSelect } from "./components/TeamSelect";
 import { TeamManagement } from "./components/TeamManagement";
 import { ProfileSettings } from "./components/ProfileSettings";
+import { PlatformSettings } from "./components/PlatformSettings";
 import { MeetingIngest } from "./components/MeetingIngest";
 import { DevelopmentBoard } from "./components/DevelopmentBoard";
 import { TestingCenter } from "./components/TestingCenter";
@@ -92,6 +93,7 @@ export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [tenantMenu, setTenantMenu] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [platformOpen, setPlatformOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("transonce.theme") === "dark");
 
   useEffect(() => {
@@ -256,6 +258,9 @@ export default function App() {
               </div>
             </button>
             <Button variant="ghost" size="icon" className="h-7 w-7" title="个人设置" onClick={() => setProfileOpen(true)}><UserCog className="w-3.5 h-3.5" /></Button>
+            {user.isSuperAdmin && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="平台登录设置" onClick={() => setPlatformOpen(true)}><KeyRound className="w-3.5 h-3.5" /></Button>
+            )}
             <Button variant="ghost" size="icon" className="h-7 w-7" title="退出登录" onClick={logout}><LogOut className="w-3.5 h-3.5" /></Button>
           </div>
         </div>
@@ -307,6 +312,7 @@ export default function App() {
 
       <GlobalAIChat />
       {profileOpen && <ProfileSettings onClose={() => setProfileOpen(false)} />}
+      {platformOpen && <PlatformSettings onClose={() => setPlatformOpen(false)} />}
     </div>
   );
 }

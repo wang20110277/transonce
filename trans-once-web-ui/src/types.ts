@@ -7,7 +7,28 @@ export type AuthUser = {
   avatar?: string | null;
   isSuperAdmin: boolean;
   status?: string;
+  authProvider?: "password" | "microsoft";
   createdAt?: string;
+};
+
+// 登录页在未认证状态下需要知道的开关（GET /api/auth/config）。
+export type AuthConfig = {
+  passwordLoginEnabled: boolean;
+  registrationEnabled: boolean;
+  microsoftEnabled: boolean;
+};
+
+// 超级管理员的登录设置（GET/PUT /api/auth/settings）；secret 只回掩码。
+export type AuthSettings = {
+  passwordLoginEnabled: boolean;
+  registrationEnabled: boolean;
+  microsoft: {
+    enabled: boolean;
+    tenantId: string;
+    clientId: string;
+    hasClientSecret: boolean;
+    clientSecretMasked?: string | null;
+  };
 };
 
 export type Permission = { id: string; label: string; group: string };

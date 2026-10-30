@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { AuthUser, TenantSummary } from "../types";
 import { api, getToken, setToken, onUnauthorized } from "../services/api";
 import { invalidateWorkspace } from "./store";
+import { addLoginHistory } from "./loginHistory";
 
 const TENANT_KEY = "transonce.tenant";
 
@@ -89,6 +90,7 @@ export async function refreshSession(): Promise<void> {
 export async function login(email: string, password: string): Promise<void> {
   const res = await api.auth.login(email, password);
   setToken(res.token);
+  addLoginHistory({ email: res.user.email, name: res.user.name, provider: "password" });
   set({ user: res.user, status: "loading" });
   await refreshSession();
 }
@@ -96,6 +98,17 @@ export async function login(email: string, password: string): Promise<void> {
 export async function register(email: string, name: string, password: string): Promise<void> {
   const res = await api.auth.register(email, name, password);
   setToken(res.token);
+  addLoginHistory({ email: res.user.email, name: res.user.name, provider: "password" });
+  set({ user: res.user, status: "loading" });
+  await refreshSession();
+}
+
+// 微软认证登录回调：用授权码换取平台会话。邮箱已存在则复用账号，
+// 不存在由后端自动注册（无密码，authProvider=microsoft）。
+export async function loginWithMicrosoft(code: string, state: string): Promise<void> {
+  const res = await api.auth.microsoftCallback(code, state);
+  setToken(res.token);
+  addLoginHistory({ email: res.user.email, name: res.user.name, provider: "microsoft" });
   set({ user: res.user, status: "loading" });
   await refreshSession();
 }

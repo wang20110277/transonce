@@ -1,5 +1,5 @@
 import type {
-  Agent, Alert, Artifact, AuthUser, Conversation, Dashboard, Deployment, DevTask,
+  Agent, Alert, Artifact, AuthConfig, AuthSettings, AuthUser, Conversation, Dashboard, Deployment, DevTask,
   Environment, JoinRequest, Meeting, Member, Monitor, Permission, Pipeline,
   PipelineRun, Project, Requirement, Role, System, Codebase, TenantDetail,
   TenantSummary, TestRun, AgentRun, ActivityEvent, GitlabConnection, GitRepo,
@@ -64,6 +64,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const get = <T>(p: string) => request<T>("GET", p);
 const post = <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {});
+const put = <T>(p: string, b: unknown) => request<T>("PUT", p, b);
 const patch = <T>(p: string, b: unknown) => request<T>("PATCH", p, b);
 const del = <T>(p: string) => request<T>("DELETE", p);
 
@@ -78,6 +79,15 @@ export const api = {
     me: () => get<{ user: AuthUser; memberships: TenantSummary[] }>("/auth/me"),
     updateMe: (body: Partial<{ name: string; email: string; avatar: string; password: string; currentPassword: string }>) =>
       patch<AuthUser>("/auth/me", body),
+    config: () => get<AuthConfig>("/auth/config"),
+    authSettings: () => get<AuthSettings>("/auth/settings"),
+    // clientSecret 省略 = 保留已存值；空串 = 清除；非空 = 替换。
+    updateAuthSettings: (body: Partial<{ passwordLoginEnabled: boolean; registrationEnabled: boolean; microsoft: Partial<AuthSettings["microsoft"]> & { clientSecret?: string } }>) =>
+      put<AuthSettings>("/auth/settings", body),
+    microsoftStart: (redirectUri: string) =>
+      post<{ url: string }>("/auth/microsoft/start", { redirectUri }),
+    microsoftCallback: (code: string, state: string) =>
+      post<{ token: string; user: AuthUser }>("/auth/microsoft/callback", { code, state }),
     permissions: () => get<Permission[]>("/permissions"),
   },
 

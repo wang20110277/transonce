@@ -23,6 +23,7 @@ def user(r: dict) -> dict:
         "avatar": r.get("avatar"),
         "isSuperAdmin": bool(r.get("is_super_admin")),
         "status": r.get("status"),
+        "authProvider": r.get("auth_provider") or "password",
         "createdAt": _iso(r.get("created_at")),
     }
 

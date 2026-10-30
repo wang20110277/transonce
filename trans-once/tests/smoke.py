@@ -545,6 +545,92 @@ def main() -> int:
     dev = login(DEV_EMAIL, DEV_PASSWORD)
     check("email restored", bool(dev.get("token")) and dev["user"]["email"] == DEV_EMAIL)
 
+    print("\n[auth configuration]")
+    # The login page reads this unauthenticated; it must agree with the stored settings.
+    _, pub_cfg = call("GET", "/api/auth/config")
+    check("public auth config shape", all(
+        k in pub_cfg for k in ("passwordLoginEnabled", "registrationEnabled", "microsoftEnabled")
+    ))
+    status, _ = call("GET", "/api/auth/settings", token=dev["token"], expect=None)
+    check("non-admin cannot read auth settings", status == 403, f"status {status}")
+    _, orig = call("GET", "/api/auth/settings", token=admin["token"])
+    check("auth settings shape", isinstance(orig.get("microsoft"), dict) and set(orig) >= {
+        "passwordLoginEnabled", "registrationEnabled", "microsoft"
+    })
+    check("config mirrors settings", (
+        pub_cfg["passwordLoginEnabled"] == orig["passwordLoginEnabled"]
+        and pub_cfg["registrationEnabled"] == orig["registrationEnabled"]
+    ))
+    try:
+        call("PUT", "/api/auth/settings", {"registrationEnabled": False}, token=admin["token"])
+        status, _ = call(
+            "POST", "/api/auth/register",
+            {"email": f"smoke-{uuid.uuid4().hex[:8]}@transonce.local",
+             "name": "注册开关", "password": "smoke-pass-123"},
+            expect=None,
+        )
+        check("register rejected while disabled", status == 403, f"status {status}")
+
+        call("PUT", "/api/auth/settings", {"passwordLoginEnabled": False}, token=admin["token"])
+        status, _ = call("POST", "/api/auth/login",
+                         {"email": DEV_EMAIL, "password": DEV_PASSWORD}, expect=None)
+        check("password login rejected while disabled", status == 403, f"status {status}")
+        status, _ = call("POST", "/api/auth/login",
+                         {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, expect=None)
+        check("super admin keeps password login", status == 200, f"status {status}")
+
+        # The MS client secret is write-only: only run the mutation checks when
+        # no real secret is stored, so the restore below is exact.
+        if not orig["microsoft"]["hasClientSecret"]:
+            _, ms = call("PUT", "/api/auth/settings", {
+                "microsoft": {"enabled": True, "tenantId": "common",
+                              "clientId": "smoke-client-id", "clientSecret": "smoke-secret"},
+            }, token=admin["token"])
+            check("microsoft settings stored", (
+                ms["microsoft"]["clientId"] == "smoke-client-id"
+                and ms["microsoft"]["hasClientSecret"] is True
+            ))
+            check("microsoft secret only masked", str(ms["microsoft"].get("clientSecretMasked") or "").startswith("••••"))
+            _, cfg2 = call("GET", "/api/auth/config")
+            check("microsoft login advertised", cfg2["microsoftEnabled"] is True)
+            _, started = call("POST", "/api/auth/microsoft/start",
+                              {"redirectUri": "http://localhost:3002/login/microsoft"})
+            check("microsoft authorize url built", (
+                "login.microsoftonline.com/common/oauth2/v2.0/authorize" in started["url"]
+                and "client_id=smoke-client-id" in started["url"]
+                and "state=" in started["url"]
+            ))
+            status, _ = call("POST", "/api/auth/microsoft/callback",
+                             {"code": "x", "state": "garbage"}, expect=None)
+            check("microsoft callback rejects bad state", status == 400, f"status {status}")
+            status, _ = call("PUT", "/api/auth/settings",
+                             {"microsoft": {"enabled": True}}, token=dev["token"], expect=None)
+            check("non-admin cannot change auth settings", status == 403, f"status {status}")
+            status, _ = call("PUT", "/api/auth/settings", {
+                "microsoft": {"enabled": True, "clientId": "", "clientSecret": ""},
+            }, token=admin["token"], expect=None)
+            check("microsoft enable requires client config", status == 400, f"status {status}")
+        else:
+            print("  · microsoft client already configured — skipping mutation checks")
+    finally:
+        restore = {
+            "passwordLoginEnabled": orig["passwordLoginEnabled"],
+            "registrationEnabled": orig["registrationEnabled"],
+            "microsoft": {
+                "enabled": orig["microsoft"]["enabled"],
+                "tenantId": orig["microsoft"]["tenantId"],
+                "clientId": orig["microsoft"]["clientId"],
+            },
+        }
+        if not orig["microsoft"]["hasClientSecret"]:
+            restore["microsoft"]["clientSecret"] = ""  # drop the smoke secret again
+        call("PUT", "/api/auth/settings", restore, token=admin["token"])
+        _, after_cfg = call("GET", "/api/auth/config")
+        check("auth settings restored", (
+            after_cfg["passwordLoginEnabled"] == orig["passwordLoginEnabled"]
+            and after_cfg["registrationEnabled"] == orig["registrationEnabled"]
+        ))
+
     total = passed + len(failed)
     print(f"\n{'─' * 48}\n{passed}/{total} checks passed")
     if failed:

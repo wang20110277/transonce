@@ -55,16 +55,36 @@ def _sign(message: bytes) -> bytes:
 
 
 def create_token(user_id: str) -> str:
-    header = _b64e(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     now = int(time.time())
-    payload = _b64e(
-        json.dumps({"sub": user_id, "iat": now, "exp": now + TOKEN_TTL_HOURS * 3600}).encode()
-    )
+    body = {"sub": user_id, "iat": now, "exp": now + TOKEN_TTL_HOURS * 3600}
+    header = _b64e(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64e(json.dumps(body).encode())
     signing_input = f"{header}.{payload}".encode()
     return f"{header}.{payload}.{_b64e(_sign(signing_input))}"
 
 
 def decode_token(token: str) -> dict | None:
+    data = decode_signed_value(token)
+    if data and data.get("purpose") in (None, "session"):
+        return data
+    return None
+
+
+# --- signed values (OAuth state, one-time tickets) -----------------------
+
+def create_signed_value(purpose: str, data: dict, ttl_seconds: int) -> str:
+    """Sign an arbitrary payload for round-tripping through a third party
+    (e.g. the OAuth `state` parameter). Same HS256 shape as session tokens but
+    bound to a distinct `purpose`, so one can never be replayed as the other."""
+    now = int(time.time())
+    body = {**data, "purpose": purpose, "iat": now, "exp": now + ttl_seconds}
+    header = _b64e(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64e(json.dumps(body).encode())
+    signing_input = f"{header}.{payload}".encode()
+    return f"{header}.{payload}.{_b64e(_sign(signing_input))}"
+
+
+def decode_signed_value(token: str) -> dict | None:
     try:
         header, payload, signature = token.split(".")
         signing_input = f"{header}.{payload}".encode()
@@ -76,6 +96,13 @@ def decode_token(token: str) -> dict | None:
         return data
     except Exception:
         return None
+
+
+def decode_oauth_state(token: str) -> dict | None:
+    data = decode_signed_value(token)
+    if data and data.get("purpose") == "oauth-state":
+        return data
+    return None
 
 
 # --- environment secrets (MVP) ------------------------------------------

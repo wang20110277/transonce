@@ -5,13 +5,14 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Building2, Plus, ChevronRight, Users, Shield, Search, CheckCircle2,
-  Clock, LogOut, Loader2, UserCog, Globe,
+  Clock, LogOut, Loader2, UserCog, Globe, KeyRound,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { api } from "../services/api";
 import { logout, reloadMemberships, selectTenant, useSession } from "../lib/session";
 import { Modal } from "./common";
 import { ProfileSettings } from "./ProfileSettings";
+import { PlatformSettings } from "./PlatformSettings";
 
 type DiscoverItem = {
   tenant: { id: string; name: string; slug: string; description?: string | null; logo?: string | null };
@@ -34,6 +35,7 @@ export function TeamSelect() {
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [platformOpen, setPlatformOpen] = useState(false);
 
   const loadDiscover = async (query = "") => {
     setLoading(true);
@@ -96,6 +98,11 @@ export function TeamSelect() {
             </p>
           </div>
           <div className="flex items-center gap-1">
+            {user?.isSuperAdmin && (
+              <Button variant="ghost" size="sm" onClick={() => setPlatformOpen(true)} className="text-muted-foreground">
+                <KeyRound className="w-4 h-4 mr-2" /> 平台登录设置
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => setProfileOpen(true)} className="text-muted-foreground">
               <UserCog className="w-4 h-4 mr-2" /> 个人设置
             </Button>
@@ -213,6 +220,7 @@ export function TeamSelect() {
       )}
 
       {profileOpen && <ProfileSettings onClose={() => setProfileOpen(false)} />}
+      {platformOpen && <PlatformSettings onClose={() => setPlatformOpen(false)} />}
 
       {createOpen && (
         <Modal title="创建租户" onClose={() => setCreateOpen(false)}>

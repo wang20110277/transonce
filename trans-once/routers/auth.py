@@ -1,14 +1,23 @@
 """Authentication and current-user endpoints."""
 import re
 import time
+import urllib.parse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 import db
+import microsoft_client
+import platform_settings
 import serializers
 from config import DEFAULT_ROLE
 from deps import get_current_user
-from security import create_token, hash_password, verify_password
+from security import (
+    create_signed_value,
+    create_token,
+    decode_oauth_state,
+    hash_password,
+    verify_password,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -95,6 +104,9 @@ def _memberships(user: dict) -> list[dict]:
 
 @router.post("/register")
 def register(body: dict = Body(...)):
+    settings = platform_settings.get_auth_settings()
+    if not settings.get("registrationEnabled"):
+        raise HTTPException(403, "平台已关闭新用户注册")
     email = (body.get("email") or "").strip().lower()
     name = (body.get("name") or "").strip()
     password = body.get("password") or ""
@@ -115,9 +127,20 @@ def register(body: dict = Body(...)):
 
 @router.post("/login")
 def login(request: Request, body: dict = Body(...)):
+    settings = platform_settings.get_auth_settings()
+    password_login_enabled = settings.get("passwordLoginEnabled")
     email = (body.get("email") or "").strip().lower()
     key = _rate_limit_key(request, email)
     _assert_login_allowed(key)
+    if not password_login_enabled:
+        # Safety valve: the super admin keeps password access even when the
+        # switch is off, so a mis-click can never lock the platform out.
+        admin = db.fetch_one(
+            "SELECT * FROM users WHERE lower(email)=lower(%s) AND is_super_admin",
+            (email,),
+        )
+        if not admin:
+            raise HTTPException(403, "平台已关闭密码登录，请使用微软账号登录")
     user = db.fetch_one("SELECT * FROM users WHERE lower(email)=lower(%s)", (email,))
     if not user or not verify_password(body.get("password") or "", user["password_hash"]):
         _login_failures.setdefault(key, []).append(time.monotonic())
@@ -154,8 +177,14 @@ def update_me(body: dict = Body(...), user: dict = Depends(get_current_user)):
     if password is not None and len(password) < 6:
         raise HTTPException(400, "密码至少 6 位")
     # Email and password are login credentials: a valid session alone (e.g. an
-    # unlocked laptop) must not be enough to take the account over.
-    if password is not None or email:
+    # unlocked laptop) must not be enough to take the account over. Accounts
+    # created via Microsoft login have no password yet — they may set an
+    # initial password from their session (there is no credential to steal),
+    # but the login email only changes once a password exists and is confirmed.
+    has_password = bool(user.get("password_hash"))
+    if email and not has_password:
+        raise HTTPException(400, "微软登录账号请先设置密码，再修改登录邮箱")
+    if (password is not None or email) and has_password:
         if not verify_password(body.get("currentPassword") or "", user["password_hash"]):
             raise HTTPException(400, "当前密码不正确")
     fields: dict = {"name": name, "avatar": avatar}
@@ -166,3 +195,100 @@ def update_me(body: dict = Body(...), user: dict = Depends(get_current_user)):
     assigns = ", ".join(f"{col}=%s" for col in fields)
     db.execute(f"UPDATE users SET {assigns} WHERE id=%s", (*fields.values(), user["id"]))
     return _public_user(db.fetch_one("SELECT * FROM users WHERE id=%s", (user["id"],)))
+
+
+# --- login configuration (public view + super-admin management) ----------
+
+@router.get("/config")
+def auth_config():
+    """What the login page is allowed to render before authentication."""
+    return platform_settings.public_auth_config(platform_settings.get_auth_settings())
+
+
+@router.get("/settings")
+def get_auth_settings(user: dict = Depends(get_current_user)):
+    if not user.get("is_super_admin"):
+        raise HTTPException(403, "只有超级管理员可以管理登录设置")
+    return platform_settings.admin_auth_settings(platform_settings.get_auth_settings())
+
+
+@router.put("/settings")
+def put_auth_settings(body: dict = Body(...), user: dict = Depends(get_current_user)):
+    if not user.get("is_super_admin"):
+        raise HTTPException(403, "只有超级管理员可以管理登录设置")
+    try:
+        settings = platform_settings.save_auth_settings(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return platform_settings.admin_auth_settings(settings)
+
+
+# --- Microsoft OAuth (authorization-code flow) ----------------------------
+
+@router.post("/microsoft/start")
+def microsoft_start(body: dict = Body(...)):
+    settings = platform_settings.get_auth_settings()
+    ms = settings.get("microsoft") or {}
+    if not platform_settings.microsoft_ready(settings):
+        raise HTTPException(403, "平台未开启微软登录")
+    redirect_uri = (body.get("redirectUri") or "").strip()
+    parsed = urllib.parse.urlsplit(redirect_uri)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(400, "回调地址必须是 http(s) URL")
+    nonce = microsoft_client.new_nonce()
+    state = create_signed_value(
+        "oauth-state",
+        {"nonce": nonce, "redirect_uri": redirect_uri},
+        ttl_seconds=600,
+    )
+    url = microsoft_client.build_authorize_url(
+        ms.get("tenantId") or "common", ms.get("clientId") or "", redirect_uri, state, nonce
+    )
+    return {"url": url}
+
+
+@router.post("/microsoft/callback")
+def microsoft_callback(body: dict = Body(...)):
+    settings = platform_settings.get_auth_settings()
+    ms = settings.get("microsoft") or {}
+    if not platform_settings.microsoft_ready(settings):
+        raise HTTPException(403, "平台未开启微软登录")
+    state_data = decode_oauth_state(body.get("state") or "")
+    if not state_data:
+        raise HTTPException(400, "登录状态校验失败，请重新发起微软登录")
+    code = (body.get("code") or "").strip()
+    if not code:
+        raise HTTPException(400, "微软登录未返回授权码")
+
+    try:
+        tokens = microsoft_client.exchange_code(
+            ms.get("tenantId") or "common",
+            ms.get("clientId") or "",
+            ms.get("clientSecret") or "",
+            code,
+            state_data["redirect_uri"],
+        )
+        claims = microsoft_client.parse_id_token(tokens["id_token"])
+        microsoft_client.validate_id_token(
+            claims, ms.get("clientId") or "", ms.get("tenantId") or "common",
+            state_data.get("nonce") or "",
+        )
+    except microsoft_client.MicrosoftAuthError as e:
+        raise HTTPException(401, str(e))
+
+    email = str(claims.get("email") or claims.get("preferred_username") or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(400, "微软账号未提供可用的邮箱地址")
+    # Match by email: an existing account (password or otherwise) is reused;
+    # a first-time user is auto-registered without a password.
+    user = db.fetch_one("SELECT * FROM users WHERE lower(email)=lower(%s)", (email,))
+    if not user:
+        name = str(claims.get("name") or "").strip() or email.split("@", 1)[0]
+        user = db.execute_returning(
+            """INSERT INTO users (email, name, password_hash, auth_provider)
+               VALUES (%s, %s, NULL, 'microsoft') RETURNING *""",
+            (email, name),
+        )
+    if user.get("status") == "disabled":
+        raise HTTPException(403, "账号已被禁用")
+    return {"token": create_token(str(user["id"])), "user": _public_user(user)}
