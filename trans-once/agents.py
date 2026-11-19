@@ -1,5 +1,5 @@
-"""Agent runtime: drive real coding agents (claude / opencode) as subprocesses,
-with a deterministic mock fallback so the platform always works offline.
+"""Agent runtime: transcode (ACP) is the default agent; claude / opencode
+CLIs remain available as alternative providers.
 """
 import json
 import os
@@ -11,13 +11,12 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 
-import mock_agent
+import acp_agent
 from config import (
     AGENT_AGENTIC_DISALLOWED_TOOLS,
     AGENT_AGENTIC_TIMEOUT_MS,
     AGENT_CLI_DISALLOWED_TOOLS,
     AGENT_EXECUTION_MODE,
-    AGENT_FALLBACK_MOCK,
     AGENT_MAX_PROMPT_CHARS,
     AGENT_PROVIDER,
     AGENT_TIMEOUT_MS,
@@ -40,6 +39,11 @@ def _child_env() -> dict[str, str]:
     # CLI 的模型解析与用户终端保持一致。
     env.update(
         {k: v for k, v in os.environ.items() if k.startswith("ANTHROPIC_DEFAULT_")}
+    )
+    # transcode 的模型/网关/权限开关同样非机密（key 在 ~/.transcode.json 或
+    # provider 环境变量里，后者按需显式配置进服务环境）。
+    env.update(
+        {k: v for k, v in os.environ.items() if k.startswith("TRANSCODE_")}
     )
     return env
 
@@ -130,25 +134,20 @@ ROLE_PROMPTS = {
 
 def get_provider(requested: str | None = None) -> str:
     req = (requested or "auto").lower()
-    env_provider = (AGENT_PROVIDER or "auto").lower()
+    env_provider = (AGENT_PROVIDER or "transcode").lower()
     if req == "auto":
-        # An explicit platform setting wins over per-agent auto detection.
-        if env_provider in ("mock", "claude", "opencode"):
-            req = env_provider
-        else:
-            req = "auto"
-    if req == "mock":
-        return "mock"
+        req = env_provider if env_provider in ("transcode", "claude", "opencode") else "transcode"
     if req in ("claude", "opencode"):
         if shutil.which(req):
             return req
-        return "mock" if AGENT_FALLBACK_MOCK else req
-    if os.getenv("AGENT_DISABLE_CLI") == "1":
-        return "mock"
-    for candidate in ("claude", "opencode"):
-        if shutil.which(candidate):
-            return candidate
-    return "mock"
+        raise RuntimeError(f"Agent provider '{req}' 的 CLI 未安装")
+    # transcode 是平台默认 Agent 运行时（ACP 协议）。
+    if acp_agent.resolve_transcode_cli()[0]:
+        return "transcode"
+    raise RuntimeError(
+        "transcode CLI 未安装（PATH、~/.bun/bin、/usr/local/bin 均未找到）；"
+        "npm i -g @trans-ai/trans-code 或 bun link 后重启后端"
+    )
 
 
 def run_agent_text(
@@ -160,8 +159,6 @@ def run_agent_text(
     model: str | None = None,
 ) -> str:
     p = get_provider(provider)
-    if p == "mock":
-        return mock_agent.chat_reply(user_prompt)
     mode = _resolve_agentic(agentic)
     header = system_prompt if not json_only else f"{system_prompt}\n\n{JSON_ONLY}"
     combined = f"{header}\n\n===\n\n{user_prompt}"
@@ -178,6 +175,21 @@ def run_agent_text(
         cwd = _agent_workdir()
         timeout_ms = AGENT_TIMEOUT_MS
         disallowed = AGENT_CLI_DISALLOWED_TOOLS
+    if p == "transcode":
+        # ACP protocol run (see acp_agent.py). Agentic mode: the run has a
+        # private workspace and a contract file — transcode loads AGENTS.md
+        # from its cwd into its system prompt, so the prompt is just the
+        # user text. Text mode: system+user combined, like the CLIs.
+        try:
+            return acp_agent.run_acp_text(
+                user_prompt if mode else combined,
+                model=model,
+                cwd=cwd,
+                timeout_s=timeout_ms / 1000,
+                env=_child_env(),
+            )
+        except TimeoutError:
+            raise RuntimeError(f"agent (transcode) timed out after {timeout_ms / 1000:.0f}s")
     if p == "claude":
         # Prompt goes over stdin: avoids argv limits and keeps notes out of `ps`.
         args = ["--print", "--output-format", "text"]
@@ -254,15 +266,10 @@ def parse_agent_json(text: str):
 
 def _run_json(system: str, user: str, provider: str | None, model: str | None = None):
     p = get_provider(provider)
-    if p == "mock":
-        return None
-    try:
-        parsed = parse_agent_json(run_agent_text(system, user, p, model=model))
-        return parsed
-    except Exception:
-        if AGENT_FALLBACK_MOCK:
-            return None
-        raise
+    parsed = parse_agent_json(run_agent_text(system, user, p, model=model))
+    if parsed is None:
+        raise RuntimeError("Agent 未返回可解析的 JSON")
+    return parsed
 
 
 def _prompt(role: str, extra: str = "") -> str:
@@ -280,7 +287,7 @@ def extract_requirements(title: str, notes: str, provider: str | None = None, mo
     result = _run_json(system, f"会议标题：{title}\n\n会议纪要：\n{notes}", provider, model)
     if isinstance(result, list) and result:
         return result
-    return mock_agent.extract_requirements(title, notes)
+    raise RuntimeError("需求提取失败：Agent 未返回有效的需求数组")
 
 
 def design_requirement(
@@ -297,7 +304,7 @@ def design_requirement(
     result = _run_json(system, f"需求标题：{title}\n描述：{description or '（无）'}\n验收标准：\n{ac}", provider, model)
     if isinstance(result, dict) and result.get("architecture"):
         return result
-    return mock_agent.design_requirement(title, description, acceptance_criteria)
+    raise RuntimeError("需求设计失败：Agent 未返回有效的设计对象")
 
 
 def breakdown_requirement(
@@ -314,7 +321,7 @@ def breakdown_requirement(
     result = _run_json(system, f"需求标题：{title}\n描述：{description or '（无）'}\n验收标准：\n{ac}", provider, model)
     if isinstance(result, list) and result:
         return result
-    return mock_agent.breakdown_requirement(title, description, acceptance_criteria)
+    raise RuntimeError("任务拆解失败：Agent 未返回有效的任务数组")
 
 
 def generate_code(
@@ -330,7 +337,7 @@ def generate_code(
     result = _run_json(system, f"需求：{title}\n描述：{description or ''}\n任务：\n{task_titles}", provider, model)
     if isinstance(result, dict) and result.get("files"):
         return result
-    return mock_agent.generate_code(title, description, tasks or [])
+    raise RuntimeError("代码生成失败：Agent 未返回有效的制品对象")
 
 
 def generate_test_cases(
@@ -346,7 +353,7 @@ def generate_test_cases(
     result = _run_json(system, f"需求标题：{title}\n描述：{description or ''}\n验收标准：\n{ac}", provider, model)
     if isinstance(result, list) and result:
         return result
-    return mock_agent.generate_test_cases(title, description, acceptance_criteria)
+    raise RuntimeError("测试用例生成失败：Agent 未返回有效的用例数组")
 
 
 def generate_deployment_plan(title: str, description: str, provider: str | None = None, model: str | None = None) -> dict:
@@ -358,7 +365,7 @@ def generate_deployment_plan(title: str, description: str, provider: str | None 
     result = _run_json(system, f"需求/制品：{title}\n描述：{description or ''}", provider, model)
     if isinstance(result, dict) and result.get("stages"):
         return result
-    return mock_agent.generate_deployment_plan(title, description)
+    raise RuntimeError("部署方案生成失败：Agent 未返回有效的方案对象")
 
 
 def chat_reply(
@@ -367,20 +374,13 @@ def chat_reply(
 ) -> str:
     agent = agent or {}
     p = get_provider(provider or agent.get("provider"))
-    if p == "mock":
-        return mock_agent.chat_reply(message)
     system = agent.get("system_prompt") or ROLE_PROMPTS["assistant"]
     hist = "\n".join(f"{m['role']}: {m['content']}" for m in (history or [])[-8:])
-    try:
-        text = run_agent_text(
-            system + "\n请用简洁中文回答，必要时给出可执行的下一步。",
-            f"对话历史：\n{hist}\n\n用户：{message}",
-            p,
-            json_only=False,
-            model=agent.get("model") or None,
-        )
-        return text.strip()[:4000]
-    except Exception as e:
-        if AGENT_FALLBACK_MOCK:
-            return mock_agent.chat_reply(message) + f"\n\n（Agent 运行时不可用，已回退：{str(e)[:120]}）"
-        raise
+    text = run_agent_text(
+        system + "\n请用简洁中文回答，必要时给出可执行的下一步。",
+        f"对话历史：\n{hist}\n\n用户：{message}",
+        p,
+        json_only=False,
+        model=agent.get("model") or None,
+    )
+    return text.strip()[:4000]

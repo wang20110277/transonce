@@ -9,9 +9,8 @@ DATABASE_URL = os.getenv(
 # `simulated` marks pipeline/test/deploy results as not backed by a real
 # executor; the UI surfaces this so a green run is never mistaken for CI.
 EXECUTION_MODE = os.getenv("EXECUTION_MODE", "simulated")  # simulated | real
-AGENT_PROVIDER = os.getenv("AGENT_PROVIDER", "auto")  # auto | claude | opencode | mock
+AGENT_PROVIDER = os.getenv("AGENT_PROVIDER", "transcode")  # transcode (默认, ACP) | claude | opencode
 AGENT_TIMEOUT_MS = int(os.getenv("AGENT_TIMEOUT_MS", "180000"))
-AGENT_FALLBACK_MOCK = os.getenv("AGENT_FALLBACK_MOCK", "true").lower() == "true"
 # Prompts longer than this are truncated before handing them to a CLI provider.
 AGENT_MAX_PROMPT_CHARS = int(os.getenv("AGENT_MAX_PROMPT_CHARS", "120000"))
 # Optional working directory for agent CLIs. Defaults to a throwaway temp dir so

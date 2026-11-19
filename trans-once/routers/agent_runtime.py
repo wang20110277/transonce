@@ -26,6 +26,15 @@ _cache: dict = {"at": 0.0, "payload": None}
 _CLAUDE_ALIASES = ["sonnet", "opus", "haiku", "fable"]
 
 
+def _acp_installed() -> bool:
+    try:
+        import acp_agent
+
+        return acp_agent.resolve_transcode_cli()[0] is not None
+    except Exception:
+        return False
+
+
 def _installed(cli: str) -> bool:
     return agents.resolve_cli(cli)[0] is not None
 
@@ -92,11 +101,18 @@ def agent_runtime() -> dict:
                 "models": [],
                 "note": "自动模式跟随平台解析到的 CLI；要精确控制模型，请选定具体运行时。",
             },
-            "mock": {
-                "installed": True,
-                "supported": False,
-                "models": [],
-                "note": "Mock 不使用模型，留空即可。",
+            "transcode": {
+                "installed": _acp_installed(),
+                "supported": True,
+                "models": [
+                    {"id": "opus", "name": "Claude Opus"},
+                    {"id": "gpt", "name": "GPT-4o"},
+                    {"id": "deepseek", "name": "DeepSeek"},
+                    {"id": "glm", "name": "GLM"},
+                    {"id": "minimax", "name": "MiniMax"},
+                    {"id": "kimi", "name": "Kimi"},
+                ],
+                "note": "transcode（ACP，默认）：模型经 ~/.transcode.json / TRANSCODE_MODEL 配置。",
             },
             "claude": {
                 "installed": _installed("claude"),
