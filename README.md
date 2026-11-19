@@ -12,10 +12,11 @@
 
 ## 核心能力
 
-- **多租户**：用户可搜索团队并申请加入；租户管理员可直接添加成员；超级管理员可管理所有租户。所有业务数据按 `tenant_id` 隔离。
-- **租户级 RBAC**：每个租户维护自己的角色与权限，菜单权限与敏感操作权限分离（成员管理、角色管理、密钥查看、生产发布、监控维护）。
+- **多租户**：用户可搜索团队并申请加入；租户管理员可直接添加成员；超级管理员可管理所有租户（租户创建仅限超级管理员）。所有业务数据按 `tenant_id` 隔离。
+- **租户级 RBAC**：每个租户维护自己的角色与权限，菜单权限与敏感操作权限分离（成员管理、角色管理、密钥查看、生产发布、监控维护、代码库管理/审批）。
 - **个人 Agent**：成员加入租户后自动获得专属 Agent，在统一对话框中以本人权限执行需求设计、拆解、编码、测试、部署与巡检。
 - **登录治理**：支持微软认证登录（Microsoft Entra ID / Azure AD）与**通用 OIDC 单点登录**（Keycloak / Casdoor / Authing / Okta / Google 等，自动发现端点，配置 Issuer + Client 即用）；超级管理员可随时开关密码登录、自助注册与各三方登录。三方登录按邮箱匹配账号，不存在则自动注册（无密码账号，可在个人设置中补设密码）；关闭密码登录后仅超级管理员保留密码登录逃生口，防止误锁。登录页本地记录近期登录账号，点击即可回填；桌面客户端经 RFC 8252 本机回环在系统浏览器完成三方登录授权。
+- **个人设置**：登录后可自助修改姓名、登录邮箱与密码。
 - **人工闸门**：环境 IP/密码由人工维护并加密存储；查看明文密钥需要 `secret.read`；生产发布需要 `deploy.production`。
 - **完整交付链**：会议提取、原型/架构 JSON、任务看板、Agent 运行记录、制品文件、流水线阶段与日志、部署记录、健康检查与告警。
 - **代码管理**：租户可关联 GitLab（真实 API 同步；自签名/IP 证书的实例可按连接跳过 TLS 校验），成员浏览全部代码库——管理员令牌同步时自动改为全量可见（含未加入的 internal/private 项目），按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计；「项目与系统」的代码库可直接从同步目录选取，名称/地址/分支自动带出。
@@ -31,7 +32,8 @@
 | 数据库 | PostgreSQL（库名 **`transonce`**），`psycopg2` 直连，Alembic 迁移 |
 | 认证 | 标准库 PBKDF2-HMAC-SHA256 密码哈希 + HMAC-SHA256 签名令牌 |
 | Agent | `transcode`（默认，ACP 协议子进程）/ `claude`（Claude Code CLI）/ `opencode`（opencode CLI） |
-| 加密 | 环境密码使用 `SECRET_KEY` 派生密钥流加密落库（MVP，生产建议替换 KMS/Vault） |
+| 加密 | 环境密码与 GitLab 令牌使用 `SECRET_KEY` 派生密钥流加密落库（MVP，生产建议替换 KMS/Vault） |
+| 桌面端 | Electron（自定义 `app://` 协议 + 主进程内 `/api`、`/asr` 代理） |
 
 ## 目录结构
 
@@ -39,8 +41,8 @@
 trans-once-web-ui/
   components/ui/          # shadcn 基础组件（alias @ 指向 trans-once-web-ui/）
   src/App.tsx             # 登录门禁、租户门禁、权限菜单、页面路由
-  src/views/              # 工作台、项目、需求、代码管理、制品、流水线、环境、监控、告警、我的 Agent
-  src/components/         # 登录、租户选择、团队管理、会议、研发、测试、部署、Agent 对话
+  src/views/              # 工作台、项目、需求、代码管理、制品、流水线、环境、监控、告警、智能体
+  src/components/         # 登录、租户选择、团队管理、会议、研发、测试、部署、Agent 对话、个人/平台设置
   src/lib/session.ts      # 认证 / 当前租户 / 权限判断
   src/lib/store.ts        # 租户工作区数据加载与刷新、askAgent 事件
   src/services/api.ts     # 全部后端 API
@@ -48,14 +50,21 @@ trans-once/
   main.py                 # FastAPI 应用、启动时迁移检查 + 种子数据
   config.py               # 环境变量、权限目录、角色预设
   deps.py                 # 认证依赖、租户上下文、权限校验、审计日志
+  security.py             # 密码哈希、令牌签发/校验、字段加密
   orchestration.py        # Agent 动作、autopilot、部署闸门、聊天意图路由
   agents.py               # Provider 解析与分发（transcode ACP / claude / opencode）
   acp_agent.py            # transcode ACP 客户端（换行分隔 JSON-RPC over stdio）
-  routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat
+  microsoft_client.py     # 微软 Entra ID 登录（授权码 + id_token 校验）
+  oidc_client.py          # 通用 OIDC（发现、授权、令牌交换）
+  platform_settings.py    # 平台级登录方式开关（密码/注册/微软/OIDC）
+  net_guard.py            # 监控 URL 出站校验（防内网探测）
+  routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat / agent_runtime
   gitlab_client.py        # GitLab REST 客户端（stdlib urllib）
-  migrations/versions/    # 0001 初始链路，0002 多租户 + RBAC + Agent + 全量平台表
+  migrations/versions/    # 0001 初始链路 … 0009 微软登录（多租户 + RBAC + Agent + 平台表）
   seed.py                 # 幂等初始化超级管理员（不再造演示数据）
+  asr_service/            # 可选 ASR 微服务（FunASR，独立依赖，监听 8001）
   tests/smoke.py          # 端到端冒烟测试（stdlib）
+  tests/microsoft_flow.py # 微软登录回调离线测试
 trans-once-desktop/
   electron/main.js        # Electron 主进程：app:// 协议加载 dist/ 并代理 /api、/asr
   README.md               # 桌面客户端使用说明
@@ -87,10 +96,10 @@ cd trans-once
 python3 -m alembic upgrade head
 cd ..
 
-./trans-once/run.sh        # 固定监听 http://localhost:9005
+./trans-once/start.sh      # 后台启动，固定监听 http://localhost:9005，日志在 trans-once/logs/
 ```
 
-后端端口固定在 `9005`（`trans-once/run.sh` 显式传入 `--port 9005`），前端代理也指向该端口。
+后端端口固定在 `9005`，前端代理也指向该端口。`start.sh` 使用 conda 环境 `transonce`（Python 3.12）中的解释器；也可直接 `cd trans-once && python3 -m uvicorn main:app --port 9005`。
 
 启动时会自动执行 `seed.py`：只创建超级管理员（以 `ADMIN_EMAIL` 幂等，重复启动不会重复插入），不生成任何演示数据；租户、成员、项目等全部由用户自行创建。旧版本种子写入的演示租户与演示账号由迁移 `0007` 清除。
 
@@ -102,7 +111,7 @@ npm install
 npm run dev          # http://localhost:3002（固定端口，占用则启动失败）
 ```
 
-Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直接报错，不会漂移），并将 `/api` 代理到 `http://localhost:9005`、`/asr` 代理到 `http://localhost:8001`。
+Vite 固定监听 `http://localhost:3002`（`strictPort`，端口被占用时直接报错，不会漂移），并将 `/api` 代理到 `http://localhost:9005`、`/asr` 代理到 `http://localhost:8001`（ASR 微服务可选，未启动不影响其他功能）。
 
 ### 4. 桌面客户端（Electron，可选）
 
@@ -122,7 +131,7 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 |---|---|---|---|
 | `admin@transonce.local` | `admin123` | 超级管理员 | 由 `seed.py` 幂等创建（`ADMIN_EMAIL` / `ADMIN_PASSWORD` 可改），登录后可创建租户并邀请成员 |
 
-其余账号用注册页创建，然后在「团队选择」中搜索租户并提交加入申请，由租户管理员审批（或由管理员在团队管理中直接添加）。
+其余账号用注册页创建，然后在「团队选择」中搜索租户并提交加入申请，由租户管理员审批（或由管理员在团队管理中直接添加）。被拒绝后可再次申请。
 
 ## 权限模型
 
@@ -159,7 +168,7 @@ AGENT_AGENTIC_TIMEOUT_MS=600000
   - `text`（默认）：一次性 JSON 生成，禁用 CLI 工具，行为确定，适合演示与 CI。
   - `agentic`：与 Multica 本地 agent 相同的运行方式——每次运行分配独立临时工作目录、写入运行契约文件（`CLAUDE.md` / `AGENTS.md`）、开放工具自主执行、放宽超时（`AGENT_AGENTIC_TIMEOUT_MS`，默认 10 分钟）。子进程环境白名单与工作目录隔离保证 agent 无法接触数据库与密钥。
 
-每个租户内可查看/编辑自己的 Agent（名称、Provider、模型、提示词、工具集）。Agent 以所属用户权限执行，无法读取环境明文密钥，也无法绕过生产发布审批。
+每个租户内可查看/编辑自己的 Agent（名称、Provider、模型、提示词、工具集），也可重置为默认。Agent 以所属用户权限执行，无法读取环境明文密钥，也无法绕过生产发布审批。`GET /api/agent-runtime` 返回本机已安装的 CLI 与可用模型，供前端下拉选择。
 
 ## 验证
 
@@ -167,13 +176,16 @@ AGENT_AGENTIC_TIMEOUT_MS=600000
 # 后端（需服务已启动并完成种子）
 python3 trans-once/tests/smoke.py
 
+# 微软登录回调离线测试（不联网）
+python3 trans-once/tests/microsoft_flow.py
+
 # 前端类型检查与生产构建
 cd trans-once-web-ui
 npm run lint
 npm run build
 ```
 
-`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录、个人设置自助、登录方式配置开关、微软登录 URL 构建与通用 OIDC 全链路（内置迷你 IdP：发现→授权→回调→自动注册），共 92 项检查，且不会创建或删除业务实体。`trans-once/tests/microsoft_flow.py` 离线（不联网）验证微软登录回调：state 校验、id_token 校验、按邮箱自动注册/复用账号与无密码账号补设密码。
+`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录、个人设置自助、登录方式配置开关、微软登录 URL 构建与通用 OIDC 全链路（内置迷你 IdP：发现→授权→回调→自动注册），共 93 项检查，且不会创建或删除业务实体。`trans-once/tests/microsoft_flow.py` 离线（不联网）验证微软登录回调：state 校验、id_token 校验、按邮箱自动注册/复用账号与无密码账号补设密码。
 
 ## 主要 API
 
@@ -181,21 +193,23 @@ npm run build
 
 | 模块 | 代表接口 |
 |---|---|
-| 认证 | `POST /api/auth/login`、`POST /api/auth/register`、`GET /api/auth/me`、`GET /api/auth/config`、`GET/PUT /api/auth/settings`（超管）、`POST /api/auth/microsoft/start|callback`、`POST /api/auth/oidc/start|callback` |
-| 租户 | `GET /api/tenants`、`GET /api/tenants/discover`、`POST /api/tenants`、`GET /api/tenants/{id}` |
-| 成员/角色 | `POST /members`、`PATCH /members/{uid}`、`GET/POST /roles`、加入申请审批 |
+| 认证 | `POST /api/auth/login`、`POST /api/auth/register`、`GET/PATCH /api/auth/me`、`GET /api/auth/config`、`GET/PUT /api/auth/settings`（超管）、`POST /api/auth/microsoft/start|callback`、`POST /api/auth/oidc/start|callback` |
+| 租户 | `GET /api/tenants`、`GET /api/tenants/discover`、`POST /api/tenants`（超管）、`GET /api/tenants/{id}`、`GET /api/tenants/{id}/dashboard`、`GET /api/tenants/{id}/activity` |
+| 成员/角色 | `GET/POST /members`、`PATCH/DELETE /members/{uid}`、`GET/POST /roles`、`PATCH/DELETE /roles/{rid}`、`/join-requests`（申请/审批/拒绝） |
+| 智能体 | `GET /agents`、`PATCH /agents/{id}`、`POST /agents/reset`、`GET /api/agent-runtime` |
+| 项目/系统 | `/projects`、`/projects/{id}/systems`、`/systems/{id}/codebases` |
 | 会议/需求 | `/meetings`、`/meetings/{id}/extract`、`/requirements`、`/requirements/{id}/design|breakdown|code|test|autopilot` |
-| 任务/测试 | `/tasks`、`/tasks/{id}/run`、`/test-runs`、`/agent-runs` |
-| 制品/流水线 | `/artifacts`、`/artifacts/{id}/release`、`/pipelines`、`/pipelines/{id}/run` |
-| 代码管理 | `/gitlab/connections`、`/gitlab/connections/{id}/sync`、`/repos`、`/repos/{id}/access-requests`、`/repo-access-requests` |
+| 任务/测试 | `/tasks`、`/tasks/{id}/status`、`/tasks/{id}/run`、`/test-runs`、`/agent-runs` |
+| 制品/流水线 | `/artifacts`、`/artifacts/{id}/release`、`/pipelines`、`/pipelines/{id}/run`、`/pipeline-runs` |
+| 代码管理 | `/gitlab/connections`、`/gitlab/connections/{id}/sync`、`/repos`、`/repos/{id}/access-requests`、`/repo-access-requests`（列表/审批/拒绝）、`DELETE /repos/{id}/access/{uid}` |
 | 环境/部署 | `/environments`、`/environments/{id}/reveal`、`/deployments` |
-| 监控/告警 | `/monitors`、`/monitors/{id}/check`、`/monitors/check-all`、`/alerts` |
+| 监控/告警 | `/monitors`、`/monitors/{id}/check`、`/monitors/check-all`、`/alerts`、`PATCH /alerts/{id}` |
 | Agent 对话 | `/conversations`、`/conversations/{id}/messages`、`POST /chat` |
 
 交互式文档：后端启动后访问 `http://localhost:9005/docs`。
 
 ## 当前阶段
 
-已完成：多租户与 RBAC、个人 Agent、会议提取、需求设计与拆解、任务执行、代码/测试/制品、流水线、部署闸门、环境密钥、监控告警、审计时间线、GitLab 代码管理与权限申请审批、前端全量接入真实 API。
+已完成：多租户与 RBAC、个人 Agent、会议提取、需求设计与拆解、任务执行、代码/测试/制品、流水线、部署闸门、环境密钥、监控告警、审计时间线、GitLab 代码管理与权限申请审批、微软 / 通用 OIDC 登录与登录方式开关、个人设置、transcode（ACP）默认 Agent 运行时、前端全量接入真实 API。
 
 后续可扩展：GitLab 权限代发（审批通过后以令牌调用 Members API 直接开通）、真实 Git/CI 执行器、WebSocket 流式 Agent 输出、对象存储制品包、KMS/Vault、租户级配额与账单、生产发布审批流（当前为权限闸门 + 人工操作）。
