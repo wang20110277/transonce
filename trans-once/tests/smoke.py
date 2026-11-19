@@ -199,14 +199,15 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         print(f"  ✗ {name}{(' — ' + detail) if detail else ''}")
 
 
-def call(method: str, path: str, body=None, token: str | None = None, expect: int | None = 200):
+def call(method: str, path: str, body=None, token: str | None = None, expect: int | None = 200,
+         timeout: int = 45):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
     if token:
         req.add_header("Authorization", "Bearer " + token)
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             status = resp.status
             raw = resp.read().decode()
     except urllib.error.HTTPError as exc:
@@ -214,6 +215,8 @@ def call(method: str, path: str, body=None, token: str | None = None, expect: in
         raw = exc.read().decode(errors="replace")
     except urllib.error.URLError as exc:
         raise SystemExit(f"Cannot reach API at {API}: {exc}") from exc
+    except TimeoutError as exc:
+        raise AssertionError(f"{method} {path} timed out after {timeout}s") from exc
     try:
         payload = json.loads(raw) if raw else None
     except json.JSONDecodeError:
@@ -331,7 +334,7 @@ def ensure_delivery_fixtures(tenant_id: str, admin_token: str) -> None:
             {"title": "冒烟：会议纪要驱动研发闭环评审", "rawNotes": SAMPLE_NOTES},
             token=admin_token,
         )
-        call("POST", f"/api/tenants/{tenant_id}/meetings/{meeting['id']}/extract?save=true", {}, token=admin_token)
+        call("POST", f"/api/tenants/{tenant_id}/meetings/{meeting['id']}/extract?save=true", {}, token=admin_token, timeout=300)
     _, requirements = call("GET", f"/api/tenants/{tenant_id}/requirements", token=admin_token)
     if requirements:
         first = requirements[0]
@@ -482,7 +485,7 @@ def main() -> int:
     _, chat = call(
         "POST", f"/api/tenants/{tenant_id}/chat",
         {"content": "你好，请用一句话介绍你可以帮我做什么。"},
-        token=product["token"],
+        token=product["token"], timeout=300,
     )
     conversation = chat.get("conversation") or {}
     check("chat creates conversation", bool(conversation.get("id")))
@@ -497,7 +500,7 @@ def main() -> int:
     if meetings:
         _, extracted = call(
             "POST", f"/api/tenants/{tenant_id}/meetings/{meetings[0]['id']}/extract?save=false",
-            {}, token=admin["token"],
+            {}, token=admin["token"], timeout=300,
         )
         drafts = extracted.get("requirements") or []
         check("extraction returns drafts", len(drafts) > 0)

@@ -19,7 +19,7 @@
 - **人工闸门**：环境 IP/密码由人工维护并加密存储；查看明文密钥需要 `secret.read`；生产发布需要 `deploy.production`。
 - **完整交付链**：会议提取、原型/架构 JSON、任务看板、Agent 运行记录、制品文件、流水线阶段与日志、部署记录、健康检查与告警。
 - **代码管理**：租户可关联 GitLab（真实 API 同步；自签名/IP 证书的实例可按连接跳过 TLS 校验），成员浏览全部代码库——管理员令牌同步时自动改为全量可见（含未加入的 internal/private 项目），按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计；「项目与系统」的代码库可直接从同步目录选取，名称/地址/分支自动带出。
-- **可离线演示**：默认 `AGENT_PROVIDER=mock`，无需外部模型账号即可跑通全部动作；可切换 `claude` / `opencode`。
+- **Agent 运行时（transcode）**：默认经 [ACP 协议](https://agentclientprotocol.com/) 驱动本地 `transcode` CLI——流式对话、真实工具执行、按运行隔离的临时工作区；可选 `claude` / `opencode` CLI。
 
 ## 技术栈
 
@@ -30,7 +30,7 @@
 | 后端 | Python 3.12 + FastAPI + uvicorn |
 | 数据库 | PostgreSQL（库名 **`transonce`**），`psycopg2` 直连，Alembic 迁移 |
 | 认证 | 标准库 PBKDF2-HMAC-SHA256 密码哈希 + HMAC-SHA256 签名令牌 |
-| Agent | `mock`（内置确定性模拟）/ `claude`（Claude Code CLI）/ `opencode`（opencode CLI）子进程 |
+| Agent | `transcode`（默认，ACP 协议子进程）/ `claude`（Claude Code CLI）/ `opencode`（opencode CLI） |
 | 加密 | 环境密码使用 `SECRET_KEY` 派生密钥流加密落库（MVP，生产建议替换 KMS/Vault） |
 
 ## 目录结构
@@ -49,8 +49,8 @@ trans-once/
   config.py               # 环境变量、权限目录、角色预设
   deps.py                 # 认证依赖、租户上下文、权限校验、审计日志
   orchestration.py        # Agent 动作、autopilot、部署闸门、聊天意图路由
-  agents.py               # Provider 解析与 CLI 调用 / mock 回退
-  mock_agent.py           # 离线确定性 Agent 产出
+  agents.py               # Provider 解析与分发（transcode ACP / claude / opencode）
+  acp_agent.py            # transcode ACP 客户端（换行分隔 JSON-RPC over stdio）
   routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat
   gitlab_client.py        # GitLab REST 客户端（stdlib urllib）
   migrations/versions/    # 0001 初始链路，0002 多租户 + RBAC + Agent + 全量平台表
@@ -145,18 +145,16 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 `trans-once/.env`：
 
 ```env
-AGENT_PROVIDER=mock          # mock | auto | claude | opencode
+AGENT_PROVIDER=transcode     # transcode（默认，ACP） | claude | opencode
 AGENT_EXECUTION_MODE=text    # text | agentic（见下方执行方式）
 AGENT_TIMEOUT_MS=180000
 AGENT_AGENTIC_TIMEOUT_MS=600000
-AGENT_FALLBACK_MOCK=true
 ```
 
-- `mock`：无需网络/账号，返回结构化原型、架构、任务、代码、测试、部署结果，适合演示与 CI。
+- `transcode`（默认）：安装 `npm i -g @trans-ai/trans-code`（需本机有 Bun，入口为 `#!/usr/bin/env bun`），后端经 ACP 协议（`transcode acp`）驱动。模型与 API Key 推荐直接运行 `transcode` 在 REPL 中执行 `models` 命令切换并填写——配置保存在 `~/.transcode.json`，对 ACP 路径同样生效；也可用 `TRANSCODE_MODEL` + 对应 provider 环境变量（如 `DEEPSEEK_API_KEY`）配置。后端找不到 transcode CLI 时会显式报错（不再静默回退）。
 - `claude`：调用 `claude --print`，需先在本机完成 Claude Code 登录。
 - `opencode`：调用 `opencode run`，需先配置 opencode。
-- `auto`：跟随 `AGENT_PROVIDER` 的显式值；Agent 级配置可选择 `auto|claude|opencode|mock`。
-- 调用失败且 `AGENT_FALLBACK_MOCK=true` 时自动回退 mock，保证链路可演示。
+- `auto`：跟随 `AGENT_PROVIDER` 的显式值；Agent 级配置可选择 `auto|transcode|claude|opencode`。
 - 执行方式 `AGENT_EXECUTION_MODE`：
   - `text`（默认）：一次性 JSON 生成，禁用 CLI 工具，行为确定，适合演示与 CI。
   - `agentic`：与 Multica 本地 agent 相同的运行方式——每次运行分配独立临时工作目录、写入运行契约文件（`CLAUDE.md` / `AGENTS.md`）、开放工具自主执行、放宽超时（`AGENT_AGENTIC_TIMEOUT_MS`，默认 10 分钟）。子进程环境白名单与工作目录隔离保证 agent 无法接触数据库与密钥。
