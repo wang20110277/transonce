@@ -198,7 +198,7 @@ export const statusLabel: Record<string, string> = {
   high: "高",
   human: "人工",
   agent: "Agent",
-  mock: "Mock",
+  transcode: "Transcode",
   claude: "Claude Code",
   opencode: "opencode",
   auto: "自动",

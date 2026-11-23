@@ -15,6 +15,5 @@ TRANS.md 是本仓库的项目规则（命令 / 架构 / 约定的唯一事实�
 
 ## 已知坑
 
-- `trans-once/.env.example` 中 `AGENT_PROVIDER=mock` 的注释已过时：mock 运行时已移除。合法取值为 `transcode`（默认，ACP）| `claude` | `opencode`，见 `trans-once/config.py`。
 - README 中提到的 `docs/ARCHITECTURE.md` 并不存在；设计文档在 `docs/superpowers/{plans,specs}/`。
 - `trans-once/start.sh` 使用硬编码的 conda 环境 `transonce` 解释器路径启动；换机器时需改脚本或直接用 `python3 -m uvicorn`。

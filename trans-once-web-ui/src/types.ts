@@ -87,7 +87,7 @@ export type Agent = {
   ownerUserId?: string | null;
   ownerName?: string | null;
   name: string;
-  provider: "auto" | "claude" | "opencode" | "mock";
+  provider: "auto" | "transcode" | "claude" | "opencode";
   model?: string | null;
   description?: string | null;
   systemPrompt?: string | null;

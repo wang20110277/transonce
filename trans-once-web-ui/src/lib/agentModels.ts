@@ -20,7 +20,7 @@ export type AgentRuntimeCatalog = { providers: Record<string, RuntimeInfo> };
 
 export const RUNTIME_OPTIONS = [
   { id: "auto", label: "自动（跟随平台）" },
-  { id: "mock", label: "Mock（离线）" },
+  { id: "transcode", label: "Transcode（ACP）" },
   { id: "claude", label: "Claude Code" },
   { id: "opencode", label: "opencode" },
 ];
