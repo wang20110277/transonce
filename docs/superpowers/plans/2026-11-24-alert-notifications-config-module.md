@@ -10,6 +10,18 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-24-alert-notifications-config-module-design.md`
 
+## 执行记录（2026-11-24，与下文的出入）
+
+这份计划已在分支 `feat/alert-notifications` 上执行完，执行中对照设计文档做了下面这些更正。代码以仓库为准，检查项数以脚本输出为准，这里只记录和下文的出入。
+
+- 任务 2：`mask_webhook` 的兜底分支改成返回完整的五元组（地址既没有查询串也没有路径时原样返回）；离线检查补了用例。
+- 任务 3：`notifiers.send` 改成用 `_platform_error` 统一判断平台应答，4xx 应答里的错误码和原因也写进推送记录；`_describe` 和通道的修改、删除语句补上了 `tenant_id`。步骤 4 的先失败实际是 `13/28`，不是 `13/41`（夹具建不出来时有 13 条检查被跳过）。通道接口是六个，不是五个。
+- 任务 4、5、6：告警状态的更新、监控检查里的三条语句、环境的更新和删除语句都补上了 `tenant_id` 条件。
+- 任务 8 步骤 12 的等待条件应只看侧边栏（`aside nav`），原来的条件在页面停在告警配置视图时会超时。
+- 任务 10 步骤 6：来源选「手工录入」后是两条卡片，不是一条（还有一条冒烟夹具）。
+- 整体审查之后的一次统一修复：关联了监控的手工问题不再参与监控告警的去重和自动解决；重发时显式传空的 `channelIds` 返回 400；Webhook 地址拒绝空白和控制字符；另有若干收尾和新增的检查。
+- `CLAUDE.md` 里两处测试说明的更新没有随计划执行，等用户确认后应用。
+
 ## Global Constraints
 
 - 后端风格：4 空格缩进、类型注解、请求体用 `body: dict = Body(...)`（仓库里没有 Pydantic 模型）、psycopg2 原生 SQL。每个业务查询都带 `tenant_id`；路由先 `load_tenant_context(...)` 再做事；敏感操作用 `log_activity` 写审计；密钥和地址只返回掩码。
@@ -665,7 +677,7 @@ git commit -m "feat: notifiers 模块——钉钉/企业微信/飞书消息渲�
 - Modify: `trans-once/notifiers.py`（增加 `send`）
 - Create: `trans-once/alert_notify.py`
 - Modify: `trans-once/serializers.py`（增加 `alert_channel`、`alert_delivery`）
-- Modify: `trans-once/routers/devops.py`（通道的五个接口）
+- Modify: `trans-once/routers/devops.py`（通道的六个接口）
 - Modify: `trans-once/tests/smoke.py`（假群机器人、夹具和本任务的检查）
 
 **Interfaces:**
@@ -3276,7 +3288,7 @@ $S wait --text "浏览器核对通道（通道已删除）"
 ```bash
 S="agent-browser --session transonce-plan"
 $S eval --stdin < /tmp/transonce-plan/ui/noperm.js
-$S wait --fn "!document.body.innerText.includes('告警配置')"
+$S wait --fn "!document.querySelector('aside nav').innerText.includes('告警配置')"
 bash /tmp/transonce-plan/ui.sh eval /tmp/transonce-plan/ui/nav.js
 $S reload
 ```
@@ -4241,7 +4253,7 @@ $S select "#alert-source" "手工录入"
 bash /tmp/transonce-plan/ui.sh eval /tmp/transonce-plan/ui/alerts.js
 ```
 
-预期：`cards` 只剩手工录入的那一条。
+预期：`cards` 里只剩手工录入的卡片（除了新录入的这条，还有冒烟夹具「冒烟：手工录入的问题」），没有监控告警卡片。
 
 ```bash
 S="agent-browser --session transonce-plan"
