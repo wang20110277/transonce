@@ -510,6 +510,71 @@ def list_alert_deliveries(
 
 # --- alerts --------------------------------------------------------------
 
+# 列表和单条查询共用：带上监控名、环境名和录入人姓名。
+_ALERT_SELECT = """SELECT al.*, m.name AS monitor_name, e.name AS environment_name,
+                          cb.name AS created_by_name
+                   FROM alerts al
+                   LEFT JOIN monitors m ON m.id=al.monitor_id
+                   LEFT JOIN environments e ON e.id=al.environment_id
+                   LEFT JOIN users cb ON cb.id=al.created_by"""
+_DELIVERIES_PER_ALERT = 10
+
+
+def _alert_select_row(tenant_id: str, alert_id: str) -> dict:
+    try:
+        key = str(uuid.UUID(str(alert_id)))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(404, "告警不存在") from None
+    row = db.fetch_one(_ALERT_SELECT + " WHERE al.tenant_id=%s AND al.id=%s", (tenant_id, key))
+    if not row:
+        raise HTTPException(404, "告警不存在")
+    return row
+
+
+def _alert_page(tenant_id: str, rows: list[dict]) -> list[dict]:
+    """把告警行变成接口返回：补上被通知人姓名和推送记录，各用一次批量查询，不逐条查。"""
+    if not rows:
+        return []
+    # 被通知人这一列是 UUID[]，psycopg2 取出来是数组字面量字符串，先用 to_user_ids 统一成列表。
+    ids_by_alert = {str(r["id"]): alert_notify.to_user_ids(r.get("notified_user_ids")) for r in rows}
+    names = alert_notify.notified_names([u for ids in ids_by_alert.values() for u in ids])
+    history: dict[str, list[dict]] = {}
+    for delivery in db.fetch_all(
+        "SELECT * FROM alert_deliveries WHERE tenant_id=%s AND alert_id = ANY(%s::uuid[]) ORDER BY created_at DESC",
+        (tenant_id, [str(r["id"]) for r in rows]),
+    ):
+        bucket = history.setdefault(str(delivery["alert_id"]), [])
+        if len(bucket) < _DELIVERIES_PER_ALERT:
+            bucket.append(delivery)
+    items = []
+    for r in rows:
+        item = serializers.alert(r)
+        item["notifiedUsers"] = [
+            {"id": u, "name": names[u]} for u in ids_by_alert[str(r["id"])] if u in names
+        ]
+        item["deliveries"] = [serializers.alert_delivery(d) for d in history.get(str(r["id"]), [])]
+        items.append(item)
+    return items
+
+
+def _alert_item(tenant_id: str, alert_id: str) -> dict:
+    return _alert_page(tenant_id, [_alert_select_row(tenant_id, alert_id)])[0]
+
+
+def _active_member_ids(tenant_id: str, user_ids) -> list[str]:
+    """通知人员：每一项都必须是本租户状态为 active 的成员。"""
+    ids = _uuid_list(user_ids, "通知人员")
+    if not ids:
+        return []
+    rows = db.fetch_all(
+        "SELECT user_id FROM tenant_members WHERE tenant_id=%s AND status='active' AND user_id = ANY(%s::uuid[])",
+        (tenant_id, ids),
+    )
+    if {str(r["user_id"]) for r in rows} != set(ids):
+        raise HTTPException(400, "通知人员里有人不是本租户的在用成员")
+    return ids
+
+
 @router.get("/alerts")
 def list_alerts(
     tenant_id: str,
@@ -519,30 +584,82 @@ def list_alerts(
     user: dict = Depends(get_current_user),
 ):
     load_tenant_context(user, tenant_id, "alerts")
+    sql = _ALERT_SELECT + " WHERE al.tenant_id=%s"
+    args: list = [tenant_id]
     if status:
-        rows = db.fetch_all(
-            """SELECT al.*, m.name AS monitor_name FROM alerts al
-               LEFT JOIN monitors m ON m.id=al.monitor_id
-               WHERE al.tenant_id=%s AND al.status=%s
-               ORDER BY al.created_at DESC LIMIT %s OFFSET %s""",
-            (tenant_id, status, limit, offset),
+        sql += " AND al.status=%s"
+        args.append(status)
+    sql += " ORDER BY al.created_at DESC LIMIT %s OFFSET %s"
+    args += [limit, offset]
+    return _alert_page(tenant_id, db.fetch_all(sql, tuple(args)))
+
+
+@router.post("/alerts")
+def create_alert(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
+    ctx = load_tenant_context(user, tenant_id, "alerts")
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "请输入问题标题")
+    if len(title) > 200:
+        raise HTTPException(400, "标题不超过 200 个字")
+    severity = body.get("severity") or "warning"
+    if severity not in notifiers.SEVERITIES:
+        raise HTTPException(400, "级别仅支持 info、warning、critical")
+    detail = (body.get("detail") or "").strip()
+    if len(detail) > 4000:
+        raise HTTPException(400, "详细说明不超过 4000 个字")
+    environment_id = None
+    if body.get("environmentId"):
+        environment_id = _env_or_404(tenant_id, body["environmentId"])["id"]
+    monitor_id = None
+    if body.get("monitorId"):
+        monitor = _monitor_or_404(tenant_id, body["monitorId"])
+        monitor_id = monitor["id"]
+        environment_id = environment_id or monitor.get("environment_id")
+    notified = _active_member_ids(tenant_id, body.get("notifiedUserIds"))
+    row = db.execute_returning(
+        """INSERT INTO alerts
+           (tenant_id, monitor_id, environment_id, severity, title, detail,
+            source, created_by, notified_user_ids)
+           VALUES (%s, %s, %s, %s, %s, %s, 'manual', %s, %s::uuid[]) RETURNING *""",
+        (tenant_id, monitor_id, environment_id, severity, title, detail or None, user["id"], notified),
+    )
+    pushed = []
+    if body.get("push") is not False:
+        pushed = alert_notify.notify(tenant_id, "manual", row, actor_id=user["id"])
+    log_activity(ctx, "alert.created", {
+        "alertId": row["id"], "severity": severity, "notifiedUserIds": notified, "pushed": len(pushed),
+    })
+    return _alert_item(tenant_id, row["id"])
+
+
+@router.post("/alerts/{alert_id}/resend")
+def resend_alert(
+    tenant_id: str, alert_id: str, body: dict = Body(default={}), user: dict = Depends(get_current_user),
+):
+    ctx = load_tenant_context(user, tenant_id, "alerts")
+    alert = _alert_select_row(tenant_id, alert_id)
+    wanted = None
+    if body.get("channelIds"):
+        # channelIds 只能缩小范围：必须都是本租户的通道。
+        wanted = _uuid_list(body["channelIds"], "通道")
+        owned = db.fetch_all(
+            "SELECT id FROM alert_channels WHERE tenant_id=%s AND id = ANY(%s::uuid[])", (tenant_id, wanted)
         )
-    else:
-        rows = db.fetch_all(
-            """SELECT al.*, m.name AS monitor_name FROM alerts al
-               LEFT JOIN monitors m ON m.id=al.monitor_id
-               WHERE al.tenant_id=%s ORDER BY al.created_at DESC LIMIT %s OFFSET %s""",
-            (tenant_id, limit, offset),
-        )
-    return [serializers.alert(r) for r in rows]
+        if {str(c["id"]) for c in owned} != set(wanted):
+            raise HTTPException(400, "只能重发到本租户的告警通道")
+    deliveries = alert_notify.notify(
+        tenant_id, "manual" if alert.get("source") == "manual" else "monitor", alert,
+        actor_id=user["id"], channel_ids=wanted,
+    )
+    log_activity(ctx, "alert.resent", {"alertId": alert["id"], "count": len(deliveries)})
+    return {"deliveries": [serializers.alert_delivery(d) for d in deliveries]}
 
 
 @router.patch("/alerts/{alert_id}")
 def update_alert(tenant_id: str, alert_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "alerts")
-    alert = db.fetch_one("SELECT * FROM alerts WHERE id=%s AND tenant_id=%s", (alert_id, tenant_id))
-    if not alert:
-        raise HTTPException(404, "告警不存在")
+    alert = _alert_select_row(tenant_id, alert_id)
     status = body.get("status")
     if status not in ("open", "acknowledged", "resolved"):
         raise HTTPException(400, "无效的告警状态")
@@ -552,7 +669,10 @@ def update_alert(tenant_id: str, alert_id: str, body: dict = Body(...), user: di
         """UPDATE alerts SET status=%s, acknowledged_by=%s, acknowledged_at=%s,
            resolved_at=CASE WHEN %s='resolved' THEN now() ELSE NULL END
            WHERE id=%s RETURNING *""",
-        (status, ack_by, ack_at, status, alert_id),
+        (status, ack_by, ack_at, status, alert["id"]),
     )
-    log_activity(ctx, "alert.updated", {"alertId": alert_id, "status": status})
-    return serializers.alert(row)
+    log_activity(ctx, "alert.updated", {"alertId": alert["id"], "status": status})
+    pushed = []
+    if status != alert.get("status"):
+        pushed = alert_notify.notify(tenant_id, "status", row, actor_id=user["id"])
+    return {**_alert_item(tenant_id, alert["id"]), "pushed": [serializers.alert_delivery(d) for d in pushed]}

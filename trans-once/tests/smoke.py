@@ -595,6 +595,127 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
               isinstance(log, list) and any(d.get("channelName") == "冒烟失败通道" and d.get("channelId") is None
                                             for d in log))
 
+    # --- 手工录入问题 ---
+    _, members = call("GET", f"{base}/members", token=admin_token)
+    notified = {m["userId"]: m["name"] for m in members if m.get("email") in (PRODUCT_EMAIL, DEV_EMAIL)}
+    _, envs = call("GET", f"{base}/environments", token=admin_token)
+    test_env = next((e for e in envs if e["name"] == "冒烟测试环境"), envs[0])
+    ding_id, wecom_id, feishu_id = ((c or {}).get("id") for c in (ding, wecom, feishu))
+
+    def paths_since() -> list[str]:
+        """自上次清空以来假机器人收到的请求，按平台名（地址的第一段）排序。通道是并行发送的。"""
+        return sorted(r["path"].split("/")[1] for r in _FakeBotHandler.requests)
+
+    def mentions(names: list[str]) -> bool:
+        """自上次清空以来的请求里，是否有一条消息同时写了这些姓名。"""
+        return any(
+            all(name in json.dumps(r["body"], ensure_ascii=False) for name in names)
+            for r in _FakeBotHandler.requests
+        )
+
+    def alerts_listed() -> list[dict]:
+        _, out = call("GET", f"{base}/alerts?limit=500", token=admin_token, expect=None)
+        return out if isinstance(out, list) else []
+
+    def post_issue(body: dict, token: str | None = None) -> int:
+        status, _ = call("POST", f"{base}/alerts", body, token=token or admin_token, expect=None)
+        return status
+
+    issue_body = {
+        "title": ISSUE_TITLE, "severity": "warning", "detail": "冒烟：支付回调偶发超时，需要排查。",
+        "notifiedUserIds": list(notified), "environmentId": test_env["id"],
+    }
+    check("manual issue rejects a user who is not an active member",
+          post_issue({**issue_body, "notifiedUserIds": [str(uuid.uuid4())]}) == 400)
+    check("manual issue rejects a blank title", post_issue({**issue_body, "title": "   "}) == 400)
+    check("manual issue rejects an unknown severity",
+          post_issue({**issue_body, "severity": "blocker"}) == 400)
+    check("manual issue rejects an environment of another tenant",
+          post_issue({**issue_body, "environmentId": str(uuid.uuid4())}) == 404)
+    check("member without alerts cannot enter issues", post_issue(issue_body, product_token) == 403)
+    check("alerts-only member may enter issues (stopped by validation, not permission)",
+          post_issue({**issue_body, "title": ""}, alert_token) == 400)
+
+    # 夹具只建一次。之后每轮按标题找到它，先重新打开，再继续下面的检查。
+    issue = next((a for a in alerts_listed() if a.get("title") == ISSUE_TITLE and a.get("source") == "manual"), None)
+    first_time = issue is None
+    if first_time:
+        _FakeBotHandler.requests.clear()
+        _, issue = call("POST", f"{base}/alerts", issue_body, token=admin_token, expect=None)
+        check("entering an issue pushes it once to every channel subscribed to manual issues",
+              paths_since() == ["dingtalk", "feishu", "wecom"], str(paths_since()))
+        check("the pushed message names the people to notify", mentions(list(notified.values())))
+    issue_id = issue.get("id") if isinstance(issue, dict) else None
+    if issue_id and not first_time:
+        call("PATCH", f"{base}/alerts/{issue_id}", {"status": "open"}, token=admin_token, expect=None)
+
+    row = next((a for a in alerts_listed() if a.get("id") == issue_id), {})
+    check("manual issue appears in the list as an open issue with source manual",
+          bool(row) and row.get("source") == "manual" and row.get("status") == "open", str(row)[:160])
+    check("manual issue records who entered it and who is notified",
+          bool(row) and row.get("createdByName") == admin["user"]["name"]
+          and {u.get("id"): u.get("name") for u in row.get("notifiedUsers") or []} == notified,
+          str(row)[:200])
+    check("manual issue carries its environment and no monitor",
+          bool(row) and row.get("environmentId") == test_env["id"]
+          and row.get("environmentName") == test_env["name"] and not row.get("monitorId"),
+          str(row)[:160])
+    history = row.get("deliveries") or []
+    check("alert list carries the alert's delivery history",
+          bool(history) and all(d.get("alertId") == issue_id for d in history), str(history)[:160])
+
+    def resend(body: dict | None = None, token: str | None = None):
+        return call("POST", f"{base}/alerts/{issue_id}/resend", body if body is not None else {},
+                    token=token or admin_token, expect=None)
+
+    _FakeBotHandler.requests.clear()
+    _, res = resend()
+    rows = res.get("deliveries") if isinstance(res, dict) else None
+    check("resend pushes again to every channel subscribed to manual issues",
+          paths_since() == ["dingtalk", "feishu", "wecom"]
+          and isinstance(rows, list) and len(rows) == 3
+          and all(d.get("event") == "manual" and d.get("status") == "sent" for d in rows),
+          f"{paths_since()} {str(res)[:160]}")
+    check("the resent message names the people to notify", mentions(list(notified.values())))
+    row = next((a for a in alerts_listed() if a.get("id") == issue_id), {})
+    check("resends are recorded in the alert's history",
+          sum(d.get("event") == "manual" for d in row.get("deliveries") or []) >= 3,
+          str(row.get("deliveries"))[:160])
+
+    call("PATCH", f"{base}/alert-channels/{wecom_id}", {"enabled": False}, token=admin_token, expect=None)
+    _FakeBotHandler.requests.clear()
+    resend({"channelIds": [wecom_id, feishu_id]})
+    check("resend keeps only the channels that are enabled and subscribed",
+          paths_since() == ["feishu"], str(paths_since()))
+    call("PATCH", f"{base}/alert-channels/{wecom_id}", {"enabled": True}, token=admin_token, expect=None)
+    status, _ = resend({"channelIds": [str(uuid.uuid4())]})
+    check("resend rejects a channel that belongs to another tenant", status == 400, f"status {status}")
+    status, _ = resend(token=product_token)
+    check("member without alerts cannot resend", status == 403, f"status {status}")
+
+    def set_status(next_status: str) -> dict:
+        _, out = call("PATCH", f"{base}/alerts/{issue_id}", {"status": next_status},
+                      token=admin_token, expect=None)
+        return out if isinstance(out, dict) else {}
+
+    _FakeBotHandler.requests.clear()
+    out = set_status("resolved")
+    pushed = out.get("pushed") or []
+    check("resolving pushes the status change to the channels subscribed to it",
+          paths_since() == ["feishu", "wecom"] and len(pushed) == 2
+          and all(d.get("event") == "status" and d.get("status") == "sent" for d in pushed),
+          f"{paths_since()} {str(out)[:160]}")
+    check("status response returns the alert with its delivery history",
+          out.get("status") == "resolved" and isinstance(out.get("deliveries"), list)
+          and len(out["deliveries"]) >= len(pushed), str(out)[:160])
+    out = set_status("resolved")
+    check("an unchanged status pushes nothing", out.get("pushed") == [], str(out.get("pushed")))
+    _FakeBotHandler.requests.clear()
+    out = set_status("open")
+    check("reopening pushes the status change",
+          paths_since() == ["feishu", "wecom"] and len(out.get("pushed") or []) == 2, str(out)[:160])
+    set_status("resolved")  # 每轮结束留在「已解决」，不影响未处理告警数
+
 
 def main() -> int:
     print(f"\nTransOnce smoke test → {API}\n")
