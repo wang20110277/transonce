@@ -162,6 +162,27 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
+def _platform_error(provider: str, status: int, raw: bytes) -> str | None:
+    """判断平台的一次应答：成功返回 None，否则返回要写进推送记录的错误信息。
+
+    飞书的错误码在 `code`，钉钉和企业微信的在 `errcode`。应答体不是 JSON、或者里面没有错误码时，
+    只能记 `HTTP {状态码}`。非 2xx 的应答体也要看：飞书的签名、token 错误都是以 400 加 JSON 体返回的。
+    """
+    http_error = f"HTTP {status}"
+    try:
+        payload = json.loads(raw.decode(errors="replace"))
+    except ValueError:  # 空应答或不是 JSON
+        return http_error
+    if not isinstance(payload, dict):
+        return http_error
+    code = payload.get("code" if provider == "feishu" else "errcode")
+    if not code:
+        # 2xx 且没有错误码（或为 0）是成功；其它状态码下没有错误码可记。
+        return None if 200 <= status < 300 else http_error
+    reason = payload.get("msg") or payload.get("errmsg") or ""
+    return f"{code} {reason}".strip()
+
+
 def send(provider: str, webhook: str, secret: str | None, headline: str,
          lines: list[str]) -> dict:
     """向一个机器人发一条消息。永不抛异常。
@@ -176,20 +197,22 @@ def send(provider: str, webhook: str, secret: str | None, headline: str,
         request = urllib.request.Request(
             url, data=body, method="POST", headers={"Content-Type": "application/json"},
         )
-        with _OPENER.open(request, timeout=SEND_TIMEOUT_SECONDS) as response:
-            result["httpStatus"] = response.status
-            payload = json.loads(response.read().decode(errors="replace") or "{}")
-        # 飞书看 code，钉钉和企业微信看 errcode。
-        code = payload.get("code", 0) if provider == "feishu" else payload.get("errcode", 0)
-        if response.status == 200 and code == 0:
+        try:
+            with _OPENER.open(request, timeout=SEND_TIMEOUT_SECONDS) as response:
+                result["httpStatus"] = response.status
+                status, raw = response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            result["httpStatus"] = status = exc.code
+            try:
+                raw = exc.read()
+            except Exception:  # 错误应答体读不到时只剩状态码
+                raw = b""
+        error = _platform_error(provider, status, raw)
+        if error is None:
             result["status"] = "sent"
         else:
-            reason = payload.get("msg") or payload.get("errmsg") or ""
-            result["error"] = sanitize_error(f"{code} {reason}".strip(), webhook, secret)
-    except urllib.error.HTTPError as exc:
-        result["httpStatus"] = exc.code
-        result["error"] = f"HTTP {exc.code}"
-    except Exception as exc:  # 超时、连不上、响应不是 JSON
+            result["error"] = sanitize_error(error, webhook, secret)
+    except Exception as exc:  # 超时、连不上
         result["error"] = sanitize_error(f"{type(exc).__name__}: {exc}", webhook, secret)
     result["durationMs"] = int((time.time() - started) * 1000)
     return result

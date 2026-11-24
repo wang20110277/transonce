@@ -157,10 +157,17 @@ def main() -> int:
                 self.send_response(500)
                 self.end_headers()
                 return
-            payload = ({"errcode": 310000, "errmsg": "keywords not in content"}
-                       if self.path.startswith("/fail") else {"errcode": 0, "errmsg": "ok"})
+            if self.path.startswith("/http400"):
+                # 飞书的签名或 token 有问题时，应答是 400 加 JSON 体
+                status, payload = 400, {
+                    "code": 19024, "msg": "sign match fail or timestamp is not within one hour from current time",
+                }
+            elif self.path.startswith("/fail"):
+                status, payload = 200, {"errcode": 310000, "errmsg": "keywords not in content"}
+            else:
+                status, payload = 200, {"errcode": 0, "errmsg": "ok"}
             data = json.dumps(payload).encode()
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -185,6 +192,10 @@ def main() -> int:
         res = send("wecom", f"{bot}/http500", None, "标题", ["一"])
         check("http 5xx is a failure",
               res["status"] == "failed" and res["httpStatus"] == 500 and res["error"] == "HTTP 500", str(res))
+        res = send("feishu", f"{bot}/http400", "SECs", "标题", ["一"])
+        check("a 4xx answer with a platform error code keeps the code and reason",
+              res["status"] == "failed" and res["httpStatus"] == 400
+              and "19024" in (res["error"] or "") and "sign match fail" in (res["error"] or ""), str(res))
         res = send("feishu", "http://127.0.0.1:9/hook/secret-token", "SEChidden", "标题", ["一"])
         check("an unreachable robot is a failure that does not leak credentials",
               res["status"] == "failed" and "secret-token" not in (res["error"] or "")

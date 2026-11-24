@@ -41,8 +41,8 @@ def notified_names(value) -> dict[str, str]:
     return {str(r["id"]): r["name"] for r in rows}
 
 
-def _describe(alert_id: str) -> dict:
-    """消息里要写的全部内容，按告警 id 一次关联查询取齐。"""
+def _describe(tenant_id: str, alert_id: str) -> dict | None:
+    """消息里要写的全部内容，按告警 id 一次关联查询取齐。告警不属于这个租户时返回 None。"""
     row = db.fetch_one(
         """SELECT al.*, m.name AS monitor_name, e.name AS environment_name,
                   cb.name AS created_by_name, t.name AS tenant_name
@@ -51,9 +51,11 @@ def _describe(alert_id: str) -> dict:
            LEFT JOIN environments e ON e.id=al.environment_id
            LEFT JOIN users cb ON cb.id=al.created_by
            JOIN tenants t ON t.id=al.tenant_id
-           WHERE al.id=%s""",
-        (alert_id,),
+           WHERE al.id=%s AND al.tenant_id=%s""",
+        (alert_id, tenant_id),
     )
+    if row is None:
+        return None
     ids = to_user_ids(row.get("notified_user_ids"))
     names = notified_names(ids)
     if row.get("source") == "manual":
@@ -91,7 +93,12 @@ def notify(tenant_id: str, event: str, alert: dict, actor_id: str | None = None,
         ]
         if not targets:
             return []
-        headline, lines = notifiers.compose(event, **_describe(str(alert["id"])))
+        described = _describe(tenant_id, str(alert["id"]))
+        if described is None:
+            log.warning("alert notification skipped, alert not in this tenant: tenant=%s event=%s alert=%s",
+                        tenant_id, event, alert.get("id"))
+            return []
+        headline, lines = notifiers.compose(event, **described)
 
         def deliver(index: int) -> dict:
             channel = targets[index]

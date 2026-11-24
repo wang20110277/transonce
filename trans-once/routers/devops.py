@@ -463,7 +463,8 @@ def update_alert_channel(tenant_id: str, channel_id: str, body: dict = Body(...)
     assignments = ", ".join(f"{column}=%s" for column in fields) + ", updated_at=now()"
     values = [Json(fields[column]) if column == "events" else fields[column] for column in fields]
     row = db.execute_returning(
-        f"UPDATE alert_channels SET {assignments} WHERE id=%s RETURNING *", (*values, channel_id)
+        f"UPDATE alert_channels SET {assignments} WHERE id=%s AND tenant_id=%s RETURNING *",
+        (*values, channel_id, tenant_id),
     )
     log_activity(ctx, "alert.channel.updated",
                  {"channelId": channel_id, "name": row["name"], "fields": changed})
@@ -474,7 +475,7 @@ def update_alert_channel(tenant_id: str, channel_id: str, body: dict = Body(...)
 def delete_alert_channel(tenant_id: str, channel_id: str, user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "alert.channel.manage")
     channel = _channel_or_404(tenant_id, channel_id)
-    db.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
+    db.execute("DELETE FROM alert_channels WHERE id=%s AND tenant_id=%s", (channel_id, tenant_id))
     log_activity(ctx, "alert.channel.deleted", {"name": channel["name"], "provider": channel["provider"]})
     return {"ok": True}
 
