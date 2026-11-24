@@ -89,7 +89,8 @@ def mask_webhook(url: str | None) -> str | None:
         tail = last[-4:] if len(last) > 4 else ""
         masked = "/".join(segments[:-1] + [MASK + tail])
         return urlunsplit((parts.scheme, parts.netloc, masked, "", ""))
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, MASK))
+    # 没有查询串也没有路径：地址里没有凭证部分，原样返回。
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def compose(event: str, *, tenant: str, title: str, severity: str = "", origin: str = "",

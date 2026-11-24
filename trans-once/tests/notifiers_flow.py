@@ -95,11 +95,18 @@ def main() -> int:
          "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?••••••7xxx"),
         ("https://open.feishu.cn/open-apis/bot/v2/hook/abcd9f3e",
          "https://open.feishu.cn/open-apis/bot/v2/hook/••••••9f3e"),
+        ("https://x.test/abcd9f3e", "https://x.test/••••••9f3e"),
         ("https://x.test/hook/ab", "https://x.test/hook/••••••"),
     ]
     for raw, want in cases:
         got = notifiers.mask_webhook(raw)
         check(f"webhook masked: …{raw[-14:]}", got == want, got)
+    for raw in ("https://x.test", "https://x.test/"):
+        try:
+            got = notifiers.mask_webhook(raw)
+        except ValueError as exc:
+            got = f"raises ValueError: {exc}"
+        check(f"webhook without a credential part is returned unchanged: {raw}", got == raw, got)
     check("empty webhook masks to None",
           notifiers.mask_webhook(None) is None and notifiers.mask_webhook("") is None)
 
