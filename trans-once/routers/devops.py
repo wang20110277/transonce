@@ -28,6 +28,8 @@ def _env_or_404(tenant_id: str, environment_id: str) -> dict:
     return row
 
 
+OS_TYPES = ("linux", "windows")
+
 # --- environments --------------------------------------------------------
 
 @router.get("/environments")
@@ -45,14 +47,17 @@ def create_environment(tenant_id: str, body: dict = Body(...), user: dict = Depe
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "请输入环境名称")
+    os_type = body.get("osType") or "linux"
+    if os_type not in OS_TYPES:
+        raise HTTPException(400, "操作系统仅支持 Linux 或 Windows")
     row = db.execute_returning(
         """INSERT INTO environments
-           (tenant_id, name, kind, base_url, ip, username, password_enc, config, managed_by)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+           (tenant_id, name, kind, base_url, ip, username, password_enc, config, managed_by, os_type)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
         (
             tenant_id, name, body.get("kind") or "test", body.get("baseUrl"), body.get("ip"),
             body.get("username"), encrypt_secret(body.get("password")),
-            Json(body.get("config") or {}), user["id"],
+            Json(body.get("config") or {}), user["id"], os_type,
         ),
     )
     log_activity(ctx, "environment.created", {"name": name, "kind": row["kind"]})
@@ -63,17 +68,20 @@ def create_environment(tenant_id: str, body: dict = Body(...), user: dict = Depe
 def update_environment(tenant_id: str, environment_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "env.manage")
     env = _env_or_404(tenant_id, environment_id)
+    os_type = body.get("osType") or env.get("os_type") or "linux"
+    if os_type not in OS_TYPES:
+        raise HTTPException(400, "操作系统仅支持 Linux 或 Windows")
     password_enc = encrypt_secret(body["password"]) if body.get("password") else env.get("password_enc")
     row = db.execute_returning(
         """UPDATE environments
-           SET name=%s, kind=%s, base_url=%s, ip=%s, username=%s, password_enc=%s, config=%s
+           SET name=%s, kind=%s, base_url=%s, ip=%s, username=%s, password_enc=%s, config=%s, os_type=%s
            WHERE id=%s RETURNING *""",
         (
             body.get("name") or env["name"], body.get("kind", env["kind"]),
             body.get("baseUrl", env.get("base_url")), body.get("ip", env.get("ip")),
             body.get("username", env.get("username")), password_enc,
             Json(body.get("config") if body.get("config") is not None else env.get("config") or {}),
-            environment_id,
+            os_type, environment_id,
         ),
     )
     log_activity(ctx, "environment.updated", {"name": row["name"]})

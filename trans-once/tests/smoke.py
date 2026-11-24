@@ -761,6 +761,37 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
           not any(a.get("monitorId") == probe_id and a.get("status") == "open" for a in alerts_listed()))
     call("PATCH", f"{base}/monitors/{probe_id}", {"url": "http://127.0.0.1:9/health"}, token=admin_token, expect=None)
 
+    # --- 环境的操作系统 ---
+    throwaway_name = "冒烟系统类型校验"
+
+    def envs_now() -> list[dict]:
+        _, out = call("GET", f"{base}/environments", token=admin_token, expect=None)
+        return out if isinstance(out, list) else []
+
+    for leftover in [e for e in envs_now() if e["name"].startswith(throwaway_name)]:
+        call("DELETE", f"{base}/environments/{leftover['id']}", token=admin_token, expect=None)  # 上一轮中途失败留下的
+    status, created = call("POST", f"{base}/environments", {"name": throwaway_name},
+                           token=admin_token, expect=None)
+    check("a new environment defaults to linux",
+          status == 200 and isinstance(created, dict) and created.get("osType") == "linux", str(created)[:120])
+    throwaway_id = created.get("id") if isinstance(created, dict) else None
+    status, bad = call("POST", f"{base}/environments", {"name": f"{throwaway_name}（非法值）", "osType": "mac"},
+                       token=admin_token, expect=None)
+    check("creating an environment rejects an unknown operating system", status == 400, f"status {status}")
+    if status == 200:  # 校验还没生效时（先写检查的那一步），别把它留在库里
+        call("DELETE", f"{base}/environments/{bad['id']}", token=admin_token, expect=None)
+    status, _ = call("PATCH", f"{base}/environments/{throwaway_id}", {"osType": "mac"},
+                     token=admin_token, expect=None)
+    check("updating an environment rejects an unknown operating system", status == 400, f"status {status}")
+    status, _ = call("PATCH", f"{base}/environments/{throwaway_id}", {"osType": "windows"},
+                     token=admin_token, expect=None)
+    check("operating system can be switched to windows",
+          status == 200 and next(
+              (e.get("osType") for e in envs_now() if e.get("id") == throwaway_id), None) == "windows")
+    status, _ = call("DELETE", f"{base}/environments/{throwaway_id}", token=admin_token, expect=None)
+    check("throwaway environment removed",
+          status == 200 and not any(e.get("id") == throwaway_id for e in envs_now()))
+
 
 def main() -> int:
     print(f"\nTransOnce smoke test → {API}\n")

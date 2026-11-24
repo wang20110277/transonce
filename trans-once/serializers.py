@@ -173,6 +173,7 @@ def environment(r: dict, reveal: bool = False) -> dict:
         "tenantId": _s(r["tenant_id"]),
         "name": r["name"],
         "kind": r["kind"],
+        "osType": r.get("os_type") or "linux",
         "baseUrl": r.get("base_url"),
         "ip": r.get("ip"),
         "username": r.get("username"),
