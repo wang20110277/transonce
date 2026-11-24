@@ -6,42 +6,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, ShieldAlert } from "lucide-react";
 import type { AuthSettings } from "../types";
 import { api } from "../services/api";
-import { Modal } from "./common";
+import { Modal, SwitchRow } from "./common";
 
 // 平台登录设置（仅超级管理员）：密码登录 / 注册开关，微软与通用 OIDC 客户端配置。
 // 三个区块以 tab 呈现；Client Secret 只写不读：留空提交表示保留已存的值。
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`w-10 h-6 rounded-full transition-colors shrink-0 relative ${checked ? "bg-primary" : "bg-muted-foreground/30"} ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-    >
-      {/* 手柄用 bg-background：暗色主题下 --primary 接近纯白，白手柄会隐没在轨道里。
-          left-0 必须显式声明：absolute 元素缺 left 时取静态位置，按钮内容居中会把
-          手柄横向顶出去 ~20px，两种状态都大半漂在胶囊外，看起来像没有手柄。 */}
-      <span className={`absolute left-0 top-0.5 w-5 h-5 rounded-full bg-background shadow transition-transform ${checked ? "translate-x-[18px]" : "translate-x-0.5"}`} />
-    </button>
-  );
-}
-
-function SwitchRow({
-  title, description, checked, onChange, disabled,
-}: { title: string; description: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <div className="flex items-start justify-between gap-4 rounded-lg border bg-background/50 px-3.5 py-3">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
-      <Toggle checked={checked} onChange={onChange} disabled={disabled} />
-    </div>
-  );
-}
-
 function LockedHint({ children }: { children: string }) {
   return (
     <p className="flex items-start gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">

@@ -149,6 +149,7 @@ export function statusTone(status: string): PillTone {
     case "completed":
     case "active":
     case "resolved":
+    case "sent":
       return "green";
     case "running":
     case "reviewing":
@@ -190,6 +191,7 @@ export const statusLabel: Record<string, string> = {
   open: "未处理",
   acknowledged: "已确认",
   resolved: "已解决",
+  sent: "成功",
   info: "提示",
   warning: "警告",
   critical: "严重",
@@ -206,6 +208,8 @@ export const statusLabel: Record<string, string> = {
   test: "测试",
   staging: "预发",
   production: "生产",
+  linux: "Linux",
+  windows: "Windows",
 };
 
 export function StatusPill({ status, label }: { status: string; label?: string }) {
@@ -239,14 +243,17 @@ export function Select({
   onChange,
   children,
   className = "",
+  id,
 }: {
   value: string;
   onChange: (v: string) => void;
   children: ReactNode;
   className?: string;
+  id?: string;
 }) {
   return (
     <select
+      id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={`h-9 rounded-md border bg-background px-2 text-sm outline-none focus:ring-1 focus:ring-ring ${className}`}
@@ -295,3 +302,44 @@ export function Modal({ title, children, onClose, wide }: { title: string; child
     </div>
   );
 }
+
+// 开关。原先只定义在 PlatformSettings 里，告警配置页也要用，移到公共模块。
+export function Toggle({
+  checked, onChange, disabled, ariaLabel,
+}: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; ariaLabel?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`w-10 h-6 rounded-full transition-colors shrink-0 relative ${checked ? "bg-primary" : "bg-muted-foreground/30"} ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+    >
+      {/* 手柄用 bg-background：暗色主题下 --primary 接近纯白，白手柄会隐没在轨道里。
+          left-0 必须显式声明：absolute 元素缺 left 时取静态位置，按钮内容居中会把
+          手柄横向顶出去 ~20px，两种状态都大半漂在胶囊外，看起来像没有手柄。 */}
+      <span className={`absolute left-0 top-0.5 w-5 h-5 rounded-full bg-background shadow transition-transform ${checked ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+    </button>
+  );
+}
+
+export function SwitchRow({
+  title, description, checked, onChange, disabled,
+}: { title: string; description: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-lg border bg-background/50 px-3.5 py-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+      </div>
+      <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+    </div>
+  );
+}
+
+export const alertProviderLabel: Record<string, string> = { dingtalk: "钉钉", wecom: "企业微信", feishu: "飞书" };
+export const alertEventLabel: Record<string, string> = {
+  monitor: "监控告警", manual: "手工问题", status: "状态变化", test: "测试消息",
+};

@@ -2,7 +2,7 @@ import type { ElementType } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, FolderKanban, CalendarClock, FileText, ListChecks, TestTube2,
-  Package, Workflow, Rocket, Server, Activity, Bell, Bot, Users, LogOut, GitBranch,
+  Package, Workflow, Rocket, Server, Activity, Bell, BellRing, Bot, Users, LogOut, GitBranch,
   Building2, ChevronDown, Menu, X, Moon, Sun, Sparkles, ArrowLeftRight, ShieldAlert, UserCog, KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import { Pipelines } from "./views/Pipelines";
 import { Environments } from "./views/Environments";
 import { Monitoring } from "./views/Monitoring";
 import { Alerts } from "./views/Alerts";
+import { AlertSettings } from "./views/AlertSettings";
 import { MyAgent } from "./views/MyAgent";
 import { can, clearTenant, logout, refreshSession, selectTenant, useSession } from "./lib/session";
 import { invalidateWorkspace, loadWorkspace, useWorkspace } from "./lib/store";
@@ -34,7 +35,7 @@ import { ErrorBoundary, formatDate } from "./components/common";
 type ViewId =
   | "dashboard" | "projects" | "meetings" | "requirements" | "development"
   | "testing" | "repos" | "artifacts" | "pipelines" | "deployment" | "environments"
-  | "monitoring" | "alerts" | "agents" | "team";
+  | "monitoring" | "alerts" | "alert-settings" | "agents" | "team";
 
 const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementType; perm: string }[] }[] = [
   { group: "总览", items: [{ id: "dashboard", label: "工作台", icon: LayoutDashboard, perm: "dashboard" }] },
@@ -60,9 +61,15 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
   {
     group: "运维",
     items: [
-      { id: "environments", label: "环境配置", icon: Server, perm: "environments" },
       { id: "monitoring", label: "运维监控", icon: Activity, perm: "monitoring" },
       { id: "alerts", label: "告警中心", icon: Bell, perm: "alerts" },
+    ],
+  },
+  {
+    group: "配置",
+    items: [
+      { id: "environments", label: "环境配置", icon: Server, perm: "environments" },
+      { id: "alert-settings", label: "告警配置", icon: BellRing, perm: "alert.channel.manage" },
     ],
   },
   {
@@ -78,6 +85,7 @@ const TITLES: Record<ViewId, string> = {
   dashboard: "工作台", projects: "项目管理", meetings: "会议纪要", requirements: "需求管理",
   development: "研发管理", testing: "测试管理", repos: "代码管理", artifacts: "制品管理", pipelines: "持续集成",
   deployment: "部署管理", environments: "环境配置", monitoring: "运维监控", alerts: "告警中心",
+  "alert-settings": "告警配置",
   agents: "智能体", team: "团队管理",
 };
 
@@ -169,6 +177,7 @@ export default function App() {
       case "environments": return <Environments />;
       case "monitoring": return <Monitoring onNavigate={(v) => setView(v as ViewId)} />;
       case "alerts": return <Alerts />;
+      case "alert-settings": return <AlertSettings />;
       case "agents": return <MyAgent />;
       case "team": return <TeamManagement />;
       default: return null;
