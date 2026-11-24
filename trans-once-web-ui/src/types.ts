@@ -348,6 +348,7 @@ export type Environment = {
   tenantId?: string;
   name: string;
   kind: "dev" | "test" | "staging" | "production";
+  osType?: "linux" | "windows";
   baseUrl?: string | null;
   ip?: string | null;
   username?: string | null;
@@ -465,12 +466,61 @@ export type Monitor = {
   createdAt: string;
 };
 
+export type AlertChannelEvent = "monitor" | "manual" | "status";
+
+// 一个告警通道对应一个群机器人。地址和密钥只写不读，接口只返回掩码。
+export type AlertChannel = {
+  id: string;
+  name: string;
+  provider: "dingtalk" | "wecom" | "feishu";
+  enabled: boolean;
+  events: Partial<Record<AlertChannelEvent, boolean>>;
+  webhookMasked?: string | null;
+  hasSecret?: boolean;
+  secretMasked?: string | null;
+  createdAt: string;
+  updatedAt?: string | null;
+};
+
+// 新建或编辑通道时提交的字段。webhook 留空表示不修改；
+// 密钥三态：不传保留，空串清除，非空替换。
+export type AlertChannelInput = {
+  name: string;
+  provider: AlertChannel["provider"];
+  webhook?: string;
+  secret?: string;
+  enabled?: boolean;
+  events?: Partial<Record<AlertChannelEvent, boolean>>;
+};
+
+// 一条推送记录：某个通道为某个事件发送一次的结果。
+export type AlertDelivery = {
+  id: string;
+  alertId?: string | null;
+  channelId?: string | null;
+  channelName: string;
+  provider: AlertChannel["provider"];
+  event: AlertChannelEvent | "test";
+  status: "sent" | "failed";
+  httpStatus?: number | null;
+  error?: string | null;
+  durationMs?: number | null;
+  createdAt: string;
+};
+
 export type Alert = {
   id: string;
   tenantId?: string;
+  source?: "monitor" | "manual";
   monitorId?: string | null;
   monitorName?: string | null;
+  environmentId?: string | null;
+  environmentName?: string | null;
   deploymentId?: string | null;
+  createdById?: string | null;
+  createdByName?: string | null;
+  notifiedUsers?: { id: string; name: string }[];
+  deliveries?: AlertDelivery[];
   severity: "info" | "warning" | "critical";
   title: string;
   detail?: string | null;

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type {
   Alert, Artifact, Dashboard, Deployment, DevTask, Environment, Meeting, Monitor,
   Pipeline, PipelineRun, Project, Requirement, TestRun, AgentRun, ActivityEvent,
-  TenantDetail, GitlabConnection, GitRepo, RepoAccessRequest,
+  TenantDetail, GitlabConnection, GitRepo, RepoAccessRequest, AlertChannel,
 } from "../types";
 import { api } from "../services/api";
 
@@ -28,6 +28,7 @@ export type WorkspaceState = {
   environments: Environment[];
   monitors: Monitor[];
   alerts: Alert[];
+  alertChannels: AlertChannel[];
   agentRuns: AgentRun[];
   activity: ActivityEvent[];
 };
@@ -54,6 +55,7 @@ const initial: WorkspaceState = {
   environments: [],
   monitors: [],
   alerts: [],
+  alertChannels: [],
   agentRuns: [],
   activity: [],
 };
@@ -99,7 +101,7 @@ export async function loadWorkspace(tenantId: string, force = false): Promise<vo
       detail, dashboard, projects, meetings, requirements, tasks, testRuns,
       artifacts, connections, repos, myRepoRequests, repoRequests,
       pipelines, pipelineRuns, deployments, environments, monitors,
-      alerts, agentRuns, activity,
+      alerts, alertChannels, agentRuns, activity,
     ] = await Promise.all([
       safe(api.tenants.detail(tenantId), null),
       safe(api.tenants.dashboard(tenantId), null),
@@ -119,6 +121,8 @@ export async function loadWorkspace(tenantId: string, force = false): Promise<vo
       safe(api.environments.list(tenantId), []),
       safe(api.monitors.list(tenantId), []),
       safe(api.alerts.list(tenantId), []),
+      // 没有 alerts 或 alert.channel.manage 权限的成员拿到 403，这里落成空数组。
+      safe(api.alertChannels.list(tenantId), []),
       safe(api.agentRuns.list(tenantId, 50), []),
       safe(api.tenants.activity(tenantId, 60), []),
     ]);
@@ -127,7 +131,7 @@ export async function loadWorkspace(tenantId: string, force = false): Promise<vo
       detail, dashboard, projects, meetings, requirements, tasks, testRuns,
       artifacts, connections, repos, myRepoRequests, repoRequests,
       pipelines, pipelineRuns, deployments, environments, monitors,
-      alerts, agentRuns, activity,
+      alerts, alertChannels, agentRuns, activity,
       error: detail ? null : "加载工作空间失败或没有访问权限",
     });
     inflight = null;

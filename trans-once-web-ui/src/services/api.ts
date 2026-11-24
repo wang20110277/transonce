@@ -3,7 +3,7 @@ import type {
   Environment, JoinRequest, Meeting, Member, Monitor, Permission, Pipeline,
   PipelineRun, Project, Requirement, Role, System, Codebase, TenantDetail,
   TenantSummary, TestRun, AgentRun, ActivityEvent, GitlabConnection, GitRepo,
-  RepoAccessRequest, RepoAccessRole,
+  RepoAccessRequest, RepoAccessRole, AlertChannel, AlertChannelInput, AlertDelivery,
 } from "../types";
 
 const BASE = "/api";
@@ -246,7 +246,27 @@ export const api = {
   alerts: {
     list: (tid: string) => get<Alert[]>(`${T(tid)}/alerts`),
     update: (tid: string, aid: string, status: Alert["status"]) =>
-      patch<Alert>(`${T(tid)}/alerts/${aid}`, { status }),
+      patch<Alert & { pushed: AlertDelivery[] }>(`${T(tid)}/alerts/${aid}`, { status }),
+    create: (tid: string, body: {
+      title: string; severity?: Alert["severity"]; detail?: string;
+      environmentId?: string; monitorId?: string; notifiedUserIds?: string[]; push?: boolean;
+    }) => post<Alert>(`${T(tid)}/alerts`, body),
+    // channelIds 只能缩小范围；不传表示推给所有符合条件（启用且已订阅）的通道。
+    resend: (tid: string, aid: string, channelIds?: string[]) =>
+      post<{ deliveries: AlertDelivery[] }>(`${T(tid)}/alerts/${aid}/resend`, channelIds ? { channelIds } : {}),
+  },
+
+  alertChannels: {
+    list: (tid: string) => get<AlertChannel[]>(`${T(tid)}/alert-channels`),
+    create: (tid: string, body: AlertChannelInput) => post<AlertChannel>(`${T(tid)}/alert-channels`, body),
+    update: (tid: string, cid: string, body: Partial<AlertChannelInput>) =>
+      patch<AlertChannel>(`${T(tid)}/alert-channels/${cid}`, body),
+    remove: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/alert-channels/${cid}`),
+    test: (tid: string, cid: string) => post<AlertDelivery>(`${T(tid)}/alert-channels/${cid}/test`),
+    deliveries: (tid: string, channelId?: string, limit = 20) =>
+      get<AlertDelivery[]>(
+        `${T(tid)}/alert-channels/deliveries?limit=${limit}${channelId ? `&channelId=${encodeURIComponent(channelId)}` : ""}`,
+      ),
   },
 
   coderepos: {
