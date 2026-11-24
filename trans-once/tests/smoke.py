@@ -516,6 +516,12 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     check("wecom rejects a signing secret",
           post_channel({"name": "x", "provider": "wecom", "webhook": f"{bot}/wecom", "secret": "s"}) == 400)
     check("missing webhook rejected", post_channel({"name": "x", "provider": "dingtalk"}) == 400)
+    status, created = call("POST", f"{base}/alert-channels",
+                           {"name": "x", "provider": "dingtalk", "webhook": f"{bot}/dingtalk?access_token=sm oke"},
+                           token=admin_token, expect=None)
+    check("webhook with whitespace inside rejected", status == 400, f"status {status}")
+    if status == 200:  # 校验还没生效时（先写检查的那一步），别把它留在库里
+        call("DELETE", f"{base}/alert-channels/{created['id']}", token=admin_token, expect=None)
 
     alert_token = ensure_alert_viewer(tenant_id, admin_token)
     status, _ = call("GET", f"{base}/alert-channels", token=product_token, expect=None)
@@ -598,6 +604,7 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     # --- 手工录入问题 ---
     _, members = call("GET", f"{base}/members", token=admin_token)
     notified = {m["userId"]: m["name"] for m in members if m.get("email") in (PRODUCT_EMAIL, DEV_EMAIL)}
+    check("two fixture members to notify exist", len(notified) == 2, str(sorted(notified)))
     _, envs = call("GET", f"{base}/environments", token=admin_token)
     test_env = next((e for e in envs if e["name"] == "冒烟测试环境"), envs[0])
     ding_id, wecom_id, feishu_id = ((c or {}).get("id") for c in (ding, wecom, feishu))
@@ -690,6 +697,8 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     call("PATCH", f"{base}/alert-channels/{wecom_id}", {"enabled": True}, token=admin_token, expect=None)
     status, _ = resend({"channelIds": [str(uuid.uuid4())]})
     check("resend rejects a channel that belongs to another tenant", status == 400, f"status {status}")
+    status, _ = resend({"channelIds": []})
+    check("resend rejects an explicit empty channel list", status == 400, f"status {status}")
     status, _ = resend(token=product_token)
     check("member without alerts cannot resend", status == 403, f"status {status}")
 
@@ -759,6 +768,26 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
           paths_since() == ["feishu", "wecom"], str(paths_since()))
     check("a recovered monitor resolves its open alerts",
           not any(a.get("monitorId") == probe_id and a.get("status") == "open" for a in alerts_listed()))
+
+    # --- 关联了监控的手工问题不参与监控告警的去重，也不会被监控恢复自动解决 ---
+    linked_title = "冒烟：关联探针的手工问题"
+    linked = next((a for a in alerts_listed() if a.get("title") == linked_title and a.get("source") == "manual"), None)
+    if linked:
+        call("PATCH", f"{base}/alerts/{linked['id']}", {"status": "open"}, token=admin_token, expect=None)
+    else:
+        _, linked = call("POST", f"{base}/alerts", {"title": linked_title, "monitorId": probe_id, "push": False},
+                         token=admin_token, expect=None)
+    linked_id = linked.get("id") if isinstance(linked, dict) else None
+    call("PATCH", f"{base}/monitors/{probe_id}", {"url": "http://127.0.0.1:9/health"}, token=admin_token, expect=None)
+    call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
+    check("a failed check still raises a monitor alert when a manual issue is linked to the monitor",
+          any(a.get("monitorId") == probe_id and a.get("source") == "monitor" and a.get("status") == "open"
+              for a in alerts_listed()))
+    call("PATCH", f"{base}/monitors/{probe_id}", {"url": f"{API}/api/health"}, token=admin_token, expect=None)
+    call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
+    check("a recovered monitor leaves a linked manual issue open",
+          bool(linked_id) and any(a.get("id") == linked_id and a.get("status") == "open" for a in alerts_listed()))
+    call("PATCH", f"{base}/alerts/{linked_id}", {"status": "resolved"}, token=admin_token, expect=None)
     call("PATCH", f"{base}/monitors/{probe_id}", {"url": "http://127.0.0.1:9/health"}, token=admin_token, expect=None)
 
     # --- 环境的操作系统 ---

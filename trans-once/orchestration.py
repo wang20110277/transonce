@@ -435,8 +435,9 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
     new_alert = None
     recovered: list[dict] = []
     if status == "down":
+        # 只看监控自己产生的告警：关联了这条监控的手工问题不参与去重。
         open_alert = db.fetch_one(
-            "SELECT * FROM alerts WHERE tenant_id=%s AND monitor_id=%s AND status='open'",
+            "SELECT * FROM alerts WHERE tenant_id=%s AND monitor_id=%s AND source='monitor' AND status='open'",
             (ctx.tenant["id"], monitor["id"]),
         )
         if not open_alert:
@@ -451,9 +452,10 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
                 ),
             )
     else:
+        # 监控恢复只自动解决监控告警，关联了它的手工问题留给人处理。
         recovered = db.fetch_all(
             "UPDATE alerts SET status='resolved', resolved_at=now() "
-            "WHERE tenant_id=%s AND monitor_id=%s AND status='open' RETURNING *",
+            "WHERE tenant_id=%s AND monitor_id=%s AND source='monitor' AND status='open' RETURNING *",
             (ctx.tenant["id"], monitor["id"]),
         )
     log_activity(ctx, "monitor.checked", {"monitorId": monitor["id"], "status": status, "latencyMs": latency}, "agent", "运维 Agent", tenant_id=ctx.tenant["id"])

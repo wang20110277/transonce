@@ -59,6 +59,25 @@ def sanitize_error(text: str, *secrets: str | None) -> str:
     return out[:MAX_ERROR_CHARS]
 
 
+def _url_parts_to_mask(url: str) -> list[str]:
+    """发送失败时要一并去掉的地址片段：查询串和最后一段路径，凭证通常就在这两处。
+
+    地址中间夹了空白或控制字符时，`http.client` 在建连前就抛 `InvalidURL`，并把路径和查询串原样写进异常文本，
+    只替换整串地址挡不住。长度不大于 1 的片段不返回：避免把 `/` 也换掉，空串更不能拿去替换。
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:  # 地址本身解析不了时只靠整串替换
+        return []
+    out = []
+    if len(parts.query) > 1:
+        out.append(parts.query)
+    last = parts.path.rstrip("/").split("/")[-1]
+    if len(last) > 1:
+        out.append(last)
+    return out
+
+
 def truncate_utf8(text: str, limit: int) -> str:
     """按 UTF-8 字节数截断，不会切坏多字节字符；末尾的省略号占 3 字节。"""
     if len(text.encode()) <= limit:
@@ -212,7 +231,9 @@ def send(provider: str, webhook: str, secret: str | None, headline: str,
             result["status"] = "sent"
         else:
             result["error"] = sanitize_error(error, webhook, secret)
-    except Exception as exc:  # 超时、连不上
-        result["error"] = sanitize_error(f"{type(exc).__name__}: {exc}", webhook, secret)
+    except Exception as exc:  # 超时、连不上、地址非法
+        result["error"] = sanitize_error(
+            f"{type(exc).__name__}: {exc}", webhook, secret, *_url_parts_to_mask(webhook)
+        )
     result["durationMs"] = int((time.time() - started) * 1000)
     return result

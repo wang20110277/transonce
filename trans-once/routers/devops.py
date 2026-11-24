@@ -399,6 +399,9 @@ def _channel_fields(body: dict, current: dict | None) -> dict:
     fields: dict = {"name": name, "provider": provider}
     webhook = (body.get("webhook") or "").strip()
     if webhook:
+        # 夹了空白或控制字符的地址能通过解析，但发送前就会失败，异常文本还会带出路径里的凭证。
+        if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in webhook):
+            raise HTTPException(400, "Webhook 地址不能包含空白或控制字符")
         # 内网地址放行（企业微信、飞书有私有化网关）：把地址自己的主机名放进白名单。
         host = (urllib.parse.urlsplit(webhook).hostname or "").strip("[]").lower()
         try:
@@ -648,9 +651,11 @@ def resend_alert(
     ctx = load_tenant_context(user, tenant_id, "alerts")
     alert = _alert_select_row(tenant_id, alert_id)
     wanted = None
-    if body.get("channelIds"):
-        # channelIds 只能缩小范围：必须都是本租户的通道。
+    if "channelIds" in body:
+        # channelIds 只能缩小范围：必须都是本租户的通道。不传表示全部，显式传空数组是错的。
         wanted = _uuid_list(body["channelIds"], "通道")
+        if not wanted:
+            raise HTTPException(400, "channelIds 不能是空数组；不传表示推给所有符合条件的通道")
         owned = db.fetch_all(
             "SELECT id FROM alert_channels WHERE tenant_id=%s AND id = ANY(%s::uuid[])", (tenant_id, wanted)
         )

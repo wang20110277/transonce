@@ -80,9 +80,12 @@ def notify(tenant_id: str, event: str, alert: dict, actor_id: str | None = None,
            channel_ids: list[str] | None = None) -> list[dict]:
     """把 `event` 推给符合条件的通道，并写推送记录。永不抛异常：群机器人出问题不能让产生告警的请求失败。
 
-    返回新建的 `alert_deliveries` 行。`channel_ids` 只能缩小范围。
+    返回新建的 `alert_deliveries` 行。`channel_ids` 只能缩小范围：None 表示推给所有符合条件的通道，
+    显式传入空列表表示一个通道都不推。
     """
     try:
+        if channel_ids is not None and len(channel_ids) == 0:
+            return []
         channels = db.fetch_all(
             "SELECT * FROM alert_channels WHERE tenant_id=%s AND enabled ORDER BY created_at", (tenant_id,)
         )

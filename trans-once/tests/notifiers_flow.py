@@ -200,6 +200,9 @@ def main() -> int:
         check("an unreachable robot is a failure that does not leak credentials",
               res["status"] == "failed" and "secret-token" not in (res["error"] or "")
               and "SEChidden" not in (res["error"] or ""), str(res))
+        res = send("feishu", f"{bot}/hook/SECRET-TOKEN-123 x", None, "标题", ["一"])
+        check("an invalid URL is a failure that does not leak the credential in its path",
+              res["status"] == "failed" and "SECRET-TOKEN-123" not in (res["error"] or ""), str(res))
         res = send("feishu", f"{bot}/ok", "SECs", "标题", ["一"])
         body = json.loads(seen[-1][1])
         check("feishu send puts timestamp and sign in the body",
