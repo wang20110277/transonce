@@ -429,14 +429,15 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
         latency = int((time.time() - t0) * 1000)
     row = db.execute_returning(
         """UPDATE monitors SET status=%s, last_checked_at=now(), last_latency_ms=%s, last_error=%s
-           WHERE id=%s RETURNING *""",
-        (status, latency, error, monitor["id"]),
+           WHERE id=%s AND tenant_id=%s RETURNING *""",
+        (status, latency, error, monitor["id"], ctx.tenant["id"]),
     )
     new_alert = None
     recovered: list[dict] = []
     if status == "down":
         open_alert = db.fetch_one(
-            "SELECT * FROM alerts WHERE monitor_id=%s AND status='open'", (monitor["id"],)
+            "SELECT * FROM alerts WHERE tenant_id=%s AND monitor_id=%s AND status='open'",
+            (ctx.tenant["id"], monitor["id"]),
         )
         if not open_alert:
             # 把监控关联的环境带到告警上，列表里一次关联就能显示环境名称。
@@ -452,8 +453,8 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
     else:
         recovered = db.fetch_all(
             "UPDATE alerts SET status='resolved', resolved_at=now() "
-            "WHERE monitor_id=%s AND status='open' RETURNING *",
-            (monitor["id"],),
+            "WHERE tenant_id=%s AND monitor_id=%s AND status='open' RETURNING *",
+            (ctx.tenant["id"], monitor["id"]),
         )
     log_activity(ctx, "monitor.checked", {"monitorId": monitor["id"], "status": status, "latencyMs": latency}, "agent", "运维 Agent", tenant_id=ctx.tenant["id"])
     # 群机器人出问题不能让监控检查失败：notify 自己兜住全部异常。

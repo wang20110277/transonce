@@ -668,8 +668,8 @@ def update_alert(tenant_id: str, alert_id: str, body: dict = Body(...), user: di
     row = db.execute_returning(
         """UPDATE alerts SET status=%s, acknowledged_by=%s, acknowledged_at=%s,
            resolved_at=CASE WHEN %s='resolved' THEN now() ELSE NULL END
-           WHERE id=%s RETURNING *""",
-        (status, ack_by, ack_at, status, alert["id"]),
+           WHERE id=%s AND tenant_id=%s RETURNING *""",
+        (status, ack_by, ack_at, status, alert["id"], tenant_id),
     )
     log_activity(ctx, "alert.updated", {"alertId": alert["id"], "status": status})
     pushed = []
