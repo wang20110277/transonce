@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from psycopg2.extras import Json
 
 import agents
+import alert_notify
 import db
 import net_guard
 import serializers
@@ -431,26 +432,35 @@ def check_monitor(ctx: TenantContext, monitor: dict) -> dict:
            WHERE id=%s RETURNING *""",
         (status, latency, error, monitor["id"]),
     )
+    new_alert = None
+    recovered: list[dict] = []
     if status == "down":
         open_alert = db.fetch_one(
             "SELECT * FROM alerts WHERE monitor_id=%s AND status='open'", (monitor["id"],)
         )
         if not open_alert:
-            db.execute(
-                """INSERT INTO alerts (tenant_id, monitor_id, severity, title, detail)
-                   VALUES (%s, %s, 'critical', %s, %s)""",
+            # 把监控关联的环境带到告警上，列表里一次关联就能显示环境名称。
+            new_alert = db.execute_returning(
+                """INSERT INTO alerts (tenant_id, monitor_id, environment_id, severity, title, detail)
+                   VALUES (%s, %s, %s, 'critical', %s, %s) RETURNING *""",
                 (
-                    ctx.tenant["id"], monitor["id"],
+                    ctx.tenant["id"], monitor["id"], monitor.get("environment_id"),
                     f"监控异常：{monitor['name']}",
                     f"{url} 检查失败：{error}",
                 ),
             )
     else:
-        db.execute(
-            "UPDATE alerts SET status='resolved', resolved_at=now() WHERE monitor_id=%s AND status='open'",
+        recovered = db.fetch_all(
+            "UPDATE alerts SET status='resolved', resolved_at=now() "
+            "WHERE monitor_id=%s AND status='open' RETURNING *",
             (monitor["id"],),
         )
     log_activity(ctx, "monitor.checked", {"monitorId": monitor["id"], "status": status, "latencyMs": latency}, "agent", "运维 Agent", tenant_id=ctx.tenant["id"])
+    # 群机器人出问题不能让监控检查失败：notify 自己兜住全部异常。
+    if new_alert:
+        alert_notify.notify(ctx.tenant["id"], "monitor", new_alert, actor_id=ctx.user["id"])
+    for alert in recovered:
+        alert_notify.notify(ctx.tenant["id"], "status", alert, actor_id=ctx.user["id"])
     return serializers.monitor(row)
 
 

@@ -716,6 +716,51 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
           paths_since() == ["feishu", "wecom"] and len(out.get("pushed") or []) == 2, str(out)[:160])
     set_status("resolved")  # 每轮结束留在「已解决」，不影响未处理告警数
 
+    # --- 监控告警联动 ---
+    _, monitors = call("GET", f"{base}/monitors", token=admin_token)
+    probe = next((m for m in monitors if m["name"] == PROBE_NAME), None)
+    if probe is None:
+        _, probe = call(
+            "POST", f"{base}/monitors",
+            {"name": PROBE_NAME, "url": "http://127.0.0.1:9/health", "environmentId": test_env["id"]},
+            token=admin_token, expect=None,
+        )
+    probe_id = probe.get("id") if isinstance(probe, dict) else None
+    # 上一轮中途失败会留下未处理的探针告警，或指向失效地址的探针：先让它恢复，把它们自动解决。
+    call("PATCH", f"{base}/monitors/{probe_id}", {"url": f"{API}/api/health"}, token=admin_token, expect=None)
+    call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
+    call("PATCH", f"{base}/monitors/{probe_id}", {"url": "http://127.0.0.1:9/health"}, token=admin_token, expect=None)
+
+    _FakeBotHandler.requests.clear()
+    _, checked = call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
+    check("probe monitor reports down",
+          isinstance(checked, dict) and checked.get("status") == "down", str(checked)[:120])
+    open_probe = [a for a in alerts_listed() if a.get("monitorId") == probe_id and a.get("status") == "open"]
+    check("a failed check creates exactly one new alert", len(open_probe) == 1, str(len(open_probe)))
+    alert = open_probe[0] if open_probe else {}
+    check("monitor alert reports source monitor and the monitor's environment",
+          alert.get("source") == "monitor" and alert.get("monitorName") == PROBE_NAME
+          and alert.get("environmentId") == test_env["id"]
+          and alert.get("environmentName") == test_env["name"]
+          and alert.get("createdByName") is None, str(alert)[:200])
+    check("a new monitor alert is pushed once to every channel subscribed to monitor alerts",
+          paths_since() == ["dingtalk", "feishu", "wecom"], str(paths_since()))
+    check("the monitor alert lists its deliveries",
+          [d.get("event") for d in alert.get("deliveries") or []].count("monitor") >= 3
+          and all(d.get("status") == "sent" for d in alert.get("deliveries") or []),
+          str(alert.get("deliveries"))[:160])
+
+    call("PATCH", f"{base}/monitors/{probe_id}", {"url": f"{API}/api/health"}, token=admin_token, expect=None)
+    _FakeBotHandler.requests.clear()
+    _, checked = call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
+    check("probe monitor recovers",
+          isinstance(checked, dict) and checked.get("status") == "up", str(checked)[:120])
+    check("a recovered monitor pushes the status change",
+          paths_since() == ["feishu", "wecom"], str(paths_since()))
+    check("a recovered monitor resolves its open alerts",
+          not any(a.get("monitorId") == probe_id and a.get("status") == "open" for a in alerts_listed()))
+    call("PATCH", f"{base}/monitors/{probe_id}", {"url": "http://127.0.0.1:9/health"}, token=admin_token, expect=None)
+
 
 def main() -> int:
     print(f"\nTransOnce smoke test → {API}\n")
