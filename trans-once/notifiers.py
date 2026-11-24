@@ -150,3 +150,46 @@ def render(provider: str, webhook: str, secret: str | None, headline: str,
             body["sign"] = feishu_sign(timestamp, secret)
         return webhook, json.dumps(body, ensure_ascii=False).encode()
     raise ValueError(f"unknown alert channel provider: {provider}")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Webhook 必须自己应答，不跟随跳转到别处。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def send(provider: str, webhook: str, secret: str | None, headline: str,
+         lines: list[str]) -> dict:
+    """向一个机器人发一条消息。永不抛异常。
+
+    返回 {"status": "sent" | "failed", "httpStatus": int | None,
+          "error": str | None, "durationMs": int}
+    """
+    started = time.time()
+    result = {"status": "failed", "httpStatus": None, "error": None, "durationMs": 0}
+    try:
+        url, body = render(provider, webhook, secret, headline, lines)
+        request = urllib.request.Request(
+            url, data=body, method="POST", headers={"Content-Type": "application/json"},
+        )
+        with _OPENER.open(request, timeout=SEND_TIMEOUT_SECONDS) as response:
+            result["httpStatus"] = response.status
+            payload = json.loads(response.read().decode(errors="replace") or "{}")
+        # 飞书看 code，钉钉和企业微信看 errcode。
+        code = payload.get("code", 0) if provider == "feishu" else payload.get("errcode", 0)
+        if response.status == 200 and code == 0:
+            result["status"] = "sent"
+        else:
+            reason = payload.get("msg") or payload.get("errmsg") or ""
+            result["error"] = sanitize_error(f"{code} {reason}".strip(), webhook, secret)
+    except urllib.error.HTTPError as exc:
+        result["httpStatus"] = exc.code
+        result["error"] = f"HTTP {exc.code}"
+    except Exception as exc:  # 超时、连不上、响应不是 JSON
+        result["error"] = sanitize_error(f"{type(exc).__name__}: {exc}", webhook, secret)
+    result["durationMs"] = int((time.time() - started) * 1000)
+    return result

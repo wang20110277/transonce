@@ -1,4 +1,5 @@
 """Row → API (camelCase) serializers shared by all routers."""
+import notifiers
 from config import EXECUTION_MODE
 from security import decrypt_secret, mask_secret
 
@@ -446,4 +447,36 @@ def activity(r: dict) -> dict:
         "type": r["type"],
         "payload": r.get("payload") or {},
         "at": _iso(r.get("at")),
+    }
+
+
+def alert_channel(r: dict) -> dict:
+    return {
+        "id": _s(r["id"]),
+        "tenantId": _s(r["tenant_id"]),
+        "name": r["name"],
+        "provider": r["provider"],
+        "enabled": bool(r["enabled"]),
+        "events": r.get("events") or {},
+        "webhookMasked": notifiers.mask_webhook(decrypt_secret(r.get("webhook_enc"))),
+        "hasSecret": bool(r.get("secret_enc")),
+        "secretMasked": mask_secret(decrypt_secret(r.get("secret_enc"))),
+        "createdAt": _iso(r.get("created_at")),
+        "updatedAt": _iso(r.get("updated_at")),
+    }
+
+
+def alert_delivery(r: dict) -> dict:
+    return {
+        "id": _s(r["id"]),
+        "alertId": _s(r.get("alert_id")),
+        "channelId": _s(r.get("channel_id")),
+        "channelName": r["channel_name"],
+        "provider": r["provider"],
+        "event": r["event"],
+        "status": r["status"],
+        "httpStatus": r.get("http_status"),
+        "error": r.get("error"),
+        "durationMs": r.get("duration_ms"),
+        "createdAt": _iso(r.get("created_at")),
     }

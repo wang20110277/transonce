@@ -13,7 +13,9 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -141,6 +143,59 @@ def main() -> int:
     check("sanitize_error strips the webhook and the secret",
           "secret-token" not in text and "SECabc" not in text, text)
     check("sanitize_error caps the length", len(notifiers.sanitize_error("e" * 1000)) == 300)
+
+    print("\n[notifiers: send]")
+    seen: list[tuple[str, bytes]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            seen.append((self.path, self.rfile.read(int(self.headers.get("content-length", 0)))))
+            if self.path.startswith("/http500"):
+                self.send_response(500)
+                self.end_headers()
+                return
+            payload = ({"errcode": 310000, "errmsg": "keywords not in content"}
+                       if self.path.startswith("/fail") else {"errcode": 0, "errmsg": "ok"})
+            data = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    bot = f"http://127.0.0.1:{server.server_port}"
+
+    send = getattr(notifiers, "send", None)
+    if send is None:
+        check("notifiers.send exists", False, "module has no attribute send")
+    else:
+        res = send("dingtalk", f"{bot}/ok?access_token=tok", None, "标题", ["一"])
+        check("2xx with errcode 0 is sent",
+              res["status"] == "sent" and res["httpStatus"] == 200 and res["error"] is None
+              and isinstance(res["durationMs"], int), str(res))
+        res = send("dingtalk", f"{bot}/fail?access_token=tok", None, "标题", ["一"])
+        check("a platform error code becomes a failed delivery",
+              res["status"] == "failed" and "310000" in res["error"]
+              and "keywords not in content" in res["error"], str(res))
+        res = send("wecom", f"{bot}/http500", None, "标题", ["一"])
+        check("http 5xx is a failure",
+              res["status"] == "failed" and res["httpStatus"] == 500 and res["error"] == "HTTP 500", str(res))
+        res = send("feishu", "http://127.0.0.1:9/hook/secret-token", "SEChidden", "标题", ["一"])
+        check("an unreachable robot is a failure that does not leak credentials",
+              res["status"] == "failed" and "secret-token" not in (res["error"] or "")
+              and "SEChidden" not in (res["error"] or ""), str(res))
+        res = send("feishu", f"{bot}/ok", "SECs", "标题", ["一"])
+        body = json.loads(seen[-1][1])
+        check("feishu send puts timestamp and sign in the body",
+              res["status"] == "sent" and str(body.get("timestamp", "")).isdigit() and bool(body.get("sign")))
+        check("send posts a JSON body to the webhook",
+              seen[0][0] == "/ok?access_token=tok" and json.loads(seen[0][1])["msgtype"] == "markdown")
+    server.shutdown()
 
     total = passed + len(failed)
     print(f"\n{passed}/{total} checks passed")

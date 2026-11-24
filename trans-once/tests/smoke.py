@@ -4,15 +4,17 @@ Usage (backend must be running on :9005):
 
     cd trans-once && python3 tests/smoke.py
     API_BASE=http://localhost:9005 python3 tests/smoke.py
+    SMOKE_ONLY=alerts python3 tests/smoke.py   # only the alert-notification section
 
 The suite is self-provisioning: there is no demo seed data any more, so it
-creates (once, idempotently) a dedicated tenant, two member accounts and the
-fixtures the checks need. Beyond that it stays non-destructive: it only reads
-data, reveals a masked secret (which writes an audit log), runs a monitor
-health check, creates/deletes one throwaway conversation, and settles one repo
-access request (idempotent across re-runs). The profile self-service section
-renames the dev account and round-trips its email/password, restoring each
-value before moving on.
+creates (once, idempotently) a dedicated tenant, its member accounts and the
+fixtures the checks need, and reuses them on later runs. Beyond that it stays
+non-destructive: it only reads data, reveals a masked secret (which writes an
+audit log), runs monitor health checks, creates/deletes one throwaway
+conversation, and settles one repo access request (idempotent across re-runs).
+The alert section talks to an in-process fake group robot. The profile
+self-service section renames the dev account and round-trips its email/password,
+restoring each value before moving on.
 """
 from __future__ import annotations
 
@@ -197,6 +199,59 @@ def _start_fake_oidc() -> str:
     return f"http://127.0.0.1:{server.server_port}"
 
 
+class _FakeBotHandler(BaseHTTPRequestHandler):
+    """Group-robot stand-in for DingTalk / WeCom / Feishu. Records every
+    request and recomputes the signature with the shared secret, so the checks
+    can tell a correctly signed call from an unsigned one."""
+
+    SECRET = "SECsmokesecret"
+    requests: list[dict] = []
+    lock = threading.Lock()
+
+    def log_message(self, *args) -> None:  # keep smoke output clean
+        pass
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server API
+        url = urllib.parse.urlsplit(self.path)
+        raw = self.rfile.read(int(self.headers.get("content-length", 0))).decode(errors="replace")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {}
+        query = urllib.parse.parse_qs(url.query)
+        timestamp = (query.get("timestamp") or [body.get("timestamp", "")])[0]
+        sign = (query.get("sign") or [body.get("sign", "")])[0]
+        # 算法照各平台文档：钉钉以密钥为 key 对 "timestamp + 换行 + 密钥" 签名，
+        # 飞书以 "timestamp + 换行 + 密钥" 为 key 对空串签名。
+        if url.path.startswith("/dingtalk"):
+            key, text = self.SECRET.encode(), f"{timestamp}\n{self.SECRET}".encode()
+        else:
+            key, text = f"{timestamp}\n{self.SECRET}".encode(), b""
+        expected = base64.b64encode(hmac.new(key, text, hashlib.sha256).digest()).decode()
+        with self.lock:
+            self.requests.append(
+                {"path": url.path, "body": body, "signed": bool(timestamp) and sign == expected}
+            )
+        if url.path.startswith("/feishu"):
+            payload = {"code": 0, "msg": "success", "data": {}}
+        elif url.path.startswith("/fail"):
+            payload = {"errcode": 310000, "errmsg": "keywords not in content"}
+        else:
+            payload = {"errcode": 0, "errmsg": "ok"}
+        data = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def _start_fake_bot() -> str:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeBotHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}"
+
+
 def check(name: str, condition: bool, detail: str = "") -> None:
     global passed
     if condition:
@@ -365,6 +420,29 @@ def _summary() -> int:
     return 0
 
 
+def ensure_alert_viewer(tenant_id: str, admin_token: str) -> str:
+    """A member whose custom role only has `alerts`: may enter issues, may not
+    manage channels. Created once, like the other fixture accounts."""
+    token = _ensure_user(ALERT_EMAIL, "冒烟告警", ALERT_PASSWORD)
+    _, roles = call("GET", f"/api/tenants/{tenant_id}/roles", token=admin_token)
+    role = next((r for r in roles if r["name"] == "冒烟告警查看"), None)
+    if role is None:
+        _, role = call(
+            "POST", f"/api/tenants/{tenant_id}/roles",
+            {"name": "冒烟告警查看", "description": "冒烟夹具：只有告警中心权限", "permissions": ["alerts"]},
+            token=admin_token,
+        )
+    _, members = call("GET", f"/api/tenants/{tenant_id}/members", token=admin_token)
+    if not any(m.get("email") == ALERT_EMAIL for m in members):
+        status, out = call(
+            "POST", f"/api/tenants/{tenant_id}/members", {"email": ALERT_EMAIL, "roleId": role["id"]},
+            token=admin_token, expect=None,
+        )
+        if status not in (200, 409):
+            raise AssertionError(f"add member {ALERT_EMAIL} -> {status}: {out}")
+    return token
+
+
 def section_alert_notifications(tenant_id: str, admin: dict, product_token: str, dev_token: str) -> None:
     """Alert channels (钉钉 / 企业微信 / 飞书), the delivery log, manual issues
     and the monitor → group push. Fixtures are created once and reused."""
@@ -380,6 +458,142 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     devops = next((r for r in (roles or []) if r.get("name") == "DevOps 工程师"), None)
     check("DevOps preset role gained alert.channel.manage",
           bool(devops) and "alert.channel.manage" in (devops.get("permissions") or []))
+
+    # --- 通道夹具与读写接口 ---
+    def ensure_channel(name: str, provider: str, path: str, secret: str | None, events: dict) -> dict | None:
+        """第一次创建通道；之后每轮把地址指到本轮启动的假机器人上。"""
+        _, channels = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
+        found = next((c for c in (channels or []) if isinstance(c, dict) and c.get("name") == name), None)
+        body = {"name": name, "provider": provider, "webhook": f"{bot}{path}", "events": events}
+        if secret:
+            body["secret"] = secret
+        if found:
+            status, row = call("PATCH", f"{base}/alert-channels/{found['id']}", body, token=admin_token, expect=None)
+        else:
+            status, row = call("POST", f"{base}/alert-channels", body, token=admin_token, expect=None)
+        return row if status == 200 and isinstance(row, dict) else None
+
+    bot = _start_fake_bot()
+    _FakeBotHandler.requests.clear()
+    ding = ensure_channel("冒烟钉钉通道", "dingtalk", "/dingtalk?access_token=smoke-token", BOT_SECRET,
+                          {"monitor": True, "manual": True, "status": False})
+    wecom = ensure_channel("冒烟企微通道", "wecom", "/wecom?key=smoke-key", None,
+                           {"monitor": True, "manual": True, "status": True})
+    feishu = ensure_channel("冒烟飞书通道", "feishu", "/feishu/hook-token-9f3e", BOT_SECRET,
+                            {"monitor": True, "manual": True, "status": True})
+    failing = ensure_channel("冒烟失败通道", "dingtalk", "/fail", None,
+                             {"monitor": False, "manual": False, "status": False})
+    check("alert channel fixtures upserted",
+          all(isinstance(c, dict) and c.get("id") for c in (ding, wecom, feishu, failing)))
+
+    _, channels = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
+    channels = channels if isinstance(channels, list) else []
+    check("channel list never returns plaintext webhook or secret",
+          bool(channels) and all("webhook" not in c and "secret" not in c for c in channels))
+    check("webhook is masked to host plus last four characters",
+          bool(ding) and ding.get("webhookMasked") == f"{bot}/dingtalk?••••••oken",
+          str((ding or {}).get("webhookMasked")))
+    check("feishu path token is masked",
+          bool(feishu) and feishu.get("webhookMasked") == f"{bot}/feishu/••••••9f3e",
+          str((feishu or {}).get("webhookMasked")))
+    check("signing secret is stored encrypted and returned masked",
+          bool(ding) and ding.get("hasSecret") is True
+          and str(ding.get("secretMasked") or "").startswith("••••••"),
+          str((ding or {}).get("secretMasked")))
+    check("wecom channel has no secret", bool(wecom) and wecom.get("hasSecret") is False)
+
+    def post_channel(body: dict) -> int:
+        status, _ = call("POST", f"{base}/alert-channels", body, token=admin_token, expect=None)
+        return status
+
+    check("unknown provider rejected",
+          post_channel({"name": "x", "provider": "slack", "webhook": f"{bot}/dingtalk"}) == 400)
+    check("non-http webhook rejected",
+          post_channel({"name": "x", "provider": "dingtalk", "webhook": "ftp://robot.example/send"}) == 400)
+    check("cloud metadata webhook rejected",
+          post_channel({"name": "x", "provider": "dingtalk",
+                        "webhook": "http://metadata.google.internal/computeMetadata/v1/"}) == 400)
+    check("wecom rejects a signing secret",
+          post_channel({"name": "x", "provider": "wecom", "webhook": f"{bot}/wecom", "secret": "s"}) == 400)
+    check("missing webhook rejected", post_channel({"name": "x", "provider": "dingtalk"}) == 400)
+
+    alert_token = ensure_alert_viewer(tenant_id, admin_token)
+    status, _ = call("GET", f"{base}/alert-channels", token=product_token, expect=None)
+    check("member without alerts cannot list channels", status == 403, f"status {status}")
+    status, mine = call("GET", f"{base}/alert-channels", token=alert_token, expect=None)
+    check("alerts-only member can read channels (masked)",
+          status == 200 and isinstance(mine, list) and all("webhook" not in c for c in mine),
+          f"status {status}")
+    status, _ = call("POST", f"{base}/alert-channels", {"name": "x", "provider": "dingtalk", "webhook": f"{bot}/dingtalk"},
+                     token=alert_token, expect=None)
+    check("alerts-only member cannot create channels", status == 403, f"status {status}")
+    status, _ = call("GET", f"{base}/alert-channels/deliveries", token=alert_token, expect=None)
+    check("alerts-only member cannot list all deliveries", status == 403, f"status {status}")
+    if ding:
+        status, _ = call("POST", f"{base}/alert-channels/{ding['id']}/test", {}, token=alert_token, expect=None)
+        check("alerts-only member cannot send test messages", status == 403, f"status {status}")
+        status, _ = call("PATCH", f"{base}/alert-channels/{ding['id']}", {"name": "x"}, token=alert_token, expect=None)
+        check("alerts-only member cannot update channels", status == 403, f"status {status}")
+        status, _ = call("DELETE", f"{base}/alert-channels/{ding['id']}", token=alert_token, expect=None)
+        check("alerts-only member cannot delete channels", status == 403, f"status {status}")
+
+    # --- 测试消息与推送记录 ---
+    def last_request() -> dict:
+        return _FakeBotHandler.requests[-1] if _FakeBotHandler.requests else {}
+
+    if ding and wecom and feishu and failing:
+        _FakeBotHandler.requests.clear()
+        _, res = call("POST", f"{base}/alert-channels/{ding['id']}/test", {}, token=admin_token, expect=None)
+        req = last_request()
+        check("test message reaches the dingtalk robot as signed markdown",
+              isinstance(res, dict) and res.get("status") == "sent" and res.get("event") == "test"
+              and req.get("path") == "/dingtalk" and req.get("signed") is True
+              and req.get("body", {}).get("msgtype") == "markdown"
+              and req.get("body", {}).get("markdown", {}).get("title") == "【TransOnce 告警】测试消息",
+              f"{str(res)[:120]} {str(req)[:160]}")
+        _, res = call("POST", f"{base}/alert-channels/{wecom['id']}/test", {}, token=admin_token, expect=None)
+        body = last_request().get("body", {})
+        content = body.get("markdown", {}).get("content", "")
+        check("test message reaches the wecom robot as markdown under 4096 bytes",
+              isinstance(res, dict) and res.get("status") == "sent" and body.get("msgtype") == "markdown"
+              and 0 < len(content.encode()) <= 4096, str(res)[:120])
+        _, res = call("POST", f"{base}/alert-channels/{feishu['id']}/test", {}, token=admin_token, expect=None)
+        req = last_request()
+        post = req.get("body", {}).get("content", {}).get("post", {}).get("zh_cn", {})
+        check("test message reaches the feishu robot as signed rich text",
+              isinstance(res, dict) and res.get("status") == "sent" and req.get("signed") is True
+              and req.get("body", {}).get("msg_type") == "post"
+              and post.get("title") == "【TransOnce 告警】测试消息",
+              f"{str(res)[:120]} {str(req)[:160]}")
+        _, res = call("POST", f"{base}/alert-channels/{failing['id']}/test", {}, token=admin_token, expect=None)
+        check("a platform error is recorded as a failed delivery",
+              isinstance(res, dict) and res.get("status") == "failed" and "310000" in str(res.get("error")),
+              str(res)[:160])
+        _, log = call("GET", f"{base}/alert-channels/deliveries", token=admin_token, expect=None)
+        check("delivery log lists the test messages",
+              isinstance(log, list) and sum(1 for d in log if d.get("event") == "test") >= 4)
+
+        # --- 修改通道：留空保留，空串清除 ---
+        call("PATCH", f"{base}/alert-channels/{ding['id']}", {"name": "冒烟钉钉通道"}, token=admin_token, expect=None)
+        _, one = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
+        after = next((c for c in (one or []) if c.get("id") == ding["id"]), {})
+        check("omitted webhook and secret are kept",
+              after.get("hasSecret") is True and after.get("webhookMasked") == ding.get("webhookMasked"),
+              str(after)[:160])
+        call("PATCH", f"{base}/alert-channels/{ding['id']}", {"secret": ""}, token=admin_token, expect=None)
+        _, one = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
+        after = next((c for c in (one or []) if c.get("id") == ding["id"]), {})
+        check("empty secret clears the stored one", after.get("hasSecret") is False)
+        call("PATCH", f"{base}/alert-channels/{ding['id']}", {"secret": BOT_SECRET}, token=admin_token, expect=None)
+        _, one = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
+        after = next((c for c in (one or []) if c.get("id") == ding["id"]), {})
+        check("a new secret replaces the cleared one", after.get("hasSecret") is True)
+        status, _ = call("DELETE", f"{base}/alert-channels/{failing['id']}", token=admin_token, expect=None)
+        check("channel can be deleted", status == 200, f"status {status}")
+        _, log = call("GET", f"{base}/alert-channels/deliveries", token=admin_token, expect=None)
+        check("delivery history survives channel deletion",
+              isinstance(log, list) and any(d.get("channelName") == "冒烟失败通道" and d.get("channelId") is None
+                                            for d in log))
 
 
 def main() -> int:

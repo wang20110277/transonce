@@ -5,10 +5,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from psycopg2.extras import Json
 
+import alert_notify
 import db
 import net_guard
+import notifiers
 import orchestration
 import serializers
+import urllib.parse
+import uuid
 from deps import get_current_user, load_tenant_context, log_activity
 from security import decrypt_secret, encrypt_secret
 
@@ -349,6 +353,158 @@ def check_all(tenant_id: str, user: dict = Depends(get_current_user)):
         except Exception:
             pass
     return out
+
+
+# --- alert channels ------------------------------------------------------
+
+def _channel_or_404(tenant_id: str, channel_id: str) -> dict:
+    row = db.fetch_one(
+        "SELECT * FROM alert_channels WHERE id=%s AND tenant_id=%s", (channel_id, tenant_id)
+    )
+    if not row:
+        raise HTTPException(404, "告警通道不存在")
+    return row
+
+
+def _uuid_list(values, label: str) -> list[str]:
+    """校验每一项都是合法的 UUID 字符串，去重并保持传入顺序。"""
+    out: list[str] = []
+    for value in values or []:
+        try:
+            out.append(str(uuid.UUID(str(value))))
+        except (ValueError, AttributeError, TypeError):
+            raise HTTPException(400, f"{label}里有无效的 ID") from None
+    return list(dict.fromkeys(out))
+
+
+def _channel_fields(body: dict, current: dict | None) -> dict:
+    """校验新建 / 修改通道的请求体，返回要写入的列。`current` 为 None 表示新建。"""
+    base = current or {}
+    name = (body.get("name") or base.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "请输入通道名称")
+    if len(name) > 50:
+        raise HTTPException(400, "通道名称不超过 50 个字")
+    provider = body.get("provider") or base.get("provider")
+    if provider not in notifiers.PROVIDERS:
+        raise HTTPException(400, "不支持的平台，仅支持钉钉、企业微信、飞书")
+    fields: dict = {"name": name, "provider": provider}
+    webhook = (body.get("webhook") or "").strip()
+    if webhook:
+        # 内网地址放行（企业微信、飞书有私有化网关）：把地址自己的主机名放进白名单。
+        host = (urllib.parse.urlsplit(webhook).hostname or "").strip("[]").lower()
+        try:
+            fields["webhook_enc"] = encrypt_secret(net_guard.validate_url(webhook, {host}))
+        except net_guard.UnsafeTarget as e:
+            raise HTTPException(400, f"Webhook 地址不被允许：{e}") from e
+    elif current is None:
+        raise HTTPException(400, "请输入 Webhook 地址")
+    # 密钥三态：不传保留，空串清除，非空替换。
+    if body.get("secret") is not None:
+        secret = str(body["secret"]).strip()
+        if secret and provider == "wecom":
+            raise HTTPException(400, "企业微信群机器人不支持签名，无需填写密钥")
+        fields["secret_enc"] = encrypt_secret(secret)
+    if "enabled" in body:
+        fields["enabled"] = bool(body.get("enabled"))
+    if "events" in body:
+        events = body.get("events")
+        if not isinstance(events, dict) or set(events) - set(notifiers.EVENTS):
+            raise HTTPException(400, "events 只能包含 monitor、manual、status")
+        fields["events"] = {
+            **notifiers.DEFAULT_EVENTS, **(base.get("events") or {}),
+            **{key: bool(value) for key, value in events.items()},
+        }
+    return fields
+
+
+@router.get("/alert-channels")
+def list_alert_channels(tenant_id: str, user: dict = Depends(get_current_user)):
+    ctx = load_tenant_context(user, tenant_id)
+    # 只读接口：有告警中心权限即可（录入问题的弹窗要知道有没有可用通道）。
+    if not (ctx.has("alerts") or ctx.has("alert.channel.manage")):
+        raise HTTPException(403, "缺少权限: alerts")
+    rows = db.fetch_all(
+        "SELECT * FROM alert_channels WHERE tenant_id=%s ORDER BY created_at", (tenant_id,)
+    )
+    return [serializers.alert_channel(r) for r in rows]
+
+
+@router.post("/alert-channels")
+def create_alert_channel(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
+    ctx = load_tenant_context(user, tenant_id, "alert.channel.manage")
+    fields = _channel_fields(body, None)
+    row = db.execute_returning(
+        """INSERT INTO alert_channels
+           (tenant_id, name, provider, webhook_enc, secret_enc, enabled, events, created_by)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+        (
+            tenant_id, fields["name"], fields["provider"], fields["webhook_enc"],
+            fields.get("secret_enc"), fields.get("enabled", True),
+            Json(fields.get("events") or notifiers.DEFAULT_EVENTS), user["id"],
+        ),
+    )
+    log_activity(ctx, "alert.channel.created",
+                 {"channelId": row["id"], "name": row["name"], "provider": row["provider"]})
+    return serializers.alert_channel(row)
+
+
+@router.patch("/alert-channels/{channel_id}")
+def update_alert_channel(tenant_id: str, channel_id: str, body: dict = Body(...), user: dict = Depends(get_current_user)):
+    ctx = load_tenant_context(user, tenant_id, "alert.channel.manage")
+    channel = _channel_or_404(tenant_id, channel_id)
+    fields = _channel_fields(body, channel)
+    labels = {"name": "name", "provider": "provider", "webhook_enc": "webhook", "secret_enc": "secret",
+              "enabled": "enabled", "events": "events"}
+    changed = [
+        labels[column] for column in fields
+        if fields[column] != (channel.get("events") or {} if column == "events" else channel.get(column))
+    ]
+    assignments = ", ".join(f"{column}=%s" for column in fields) + ", updated_at=now()"
+    values = [Json(fields[column]) if column == "events" else fields[column] for column in fields]
+    row = db.execute_returning(
+        f"UPDATE alert_channels SET {assignments} WHERE id=%s RETURNING *", (*values, channel_id)
+    )
+    log_activity(ctx, "alert.channel.updated",
+                 {"channelId": channel_id, "name": row["name"], "fields": changed})
+    return serializers.alert_channel(row)
+
+
+@router.delete("/alert-channels/{channel_id}")
+def delete_alert_channel(tenant_id: str, channel_id: str, user: dict = Depends(get_current_user)):
+    ctx = load_tenant_context(user, tenant_id, "alert.channel.manage")
+    channel = _channel_or_404(tenant_id, channel_id)
+    db.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
+    log_activity(ctx, "alert.channel.deleted", {"name": channel["name"], "provider": channel["provider"]})
+    return {"ok": True}
+
+
+@router.post("/alert-channels/{channel_id}/test")
+def test_alert_channel(tenant_id: str, channel_id: str, user: dict = Depends(get_current_user)):
+    ctx = load_tenant_context(user, tenant_id, "alert.channel.manage")
+    channel = _channel_or_404(tenant_id, channel_id)
+    row = alert_notify.send_test(tenant_id, channel, user["id"])
+    log_activity(ctx, "alert.channel.tested",
+                 {"channelId": channel_id, "name": channel["name"], "status": row["status"]})
+    return serializers.alert_delivery(row)
+
+
+@router.get("/alert-channels/deliveries")
+def list_alert_deliveries(
+    tenant_id: str,
+    channelId: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+):
+    load_tenant_context(user, tenant_id, "alert.channel.manage")
+    sql = "SELECT * FROM alert_deliveries WHERE tenant_id=%s"
+    args: list = [tenant_id]
+    if channelId:
+        sql += " AND channel_id=%s"
+        args.append(channelId)
+    sql += " ORDER BY created_at DESC LIMIT %s"
+    args.append(limit)
+    return [serializers.alert_delivery(r) for r in db.fetch_all(sql, tuple(args))]
 
 
 # --- alerts --------------------------------------------------------------
