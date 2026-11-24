@@ -1,8 +1,10 @@
 import {
   CalendarClock, FileText, ListChecks, TestTube2, Package, Workflow,
-  Rocket, Activity, Bell, Bot, ArrowRight, Server, Users, GitBranch, FolderGit2,
+  Rocket, Activity, Bell, Bot, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, CircleAlert,
+  Infinity as LoopIcon, Server, Users, GitBranch, FolderGit2, type LucideIcon,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import type { Dashboard as DashboardData } from "../types";
 import { Button } from "@/components/ui/button";
 import { PageHeader, StatCard, StatusPill, Pill, timeAgo, EmptyState } from "../components/common";
 import { useWorkspace, askAgent } from "../lib/store";
@@ -54,30 +56,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: string) => void }) {
               </div>
               {can("pipelines") && <Button variant="ghost" size="sm" onClick={() => onNavigate("pipelines")}>流水线 <ArrowRight className="w-3.5 h-3.5 ml-1" /></Button>}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-9 gap-2">
-              {[
-                { label: "会议", value: c?.meetings ?? 0, icon: CalendarClock, view: "meetings", perm: "meetings" },
-                { label: "需求", value: c?.requirements ?? 0, icon: FileText, view: "requirements", perm: "requirements" },
-                { label: "任务", value: c?.tasks ?? 0, icon: ListChecks, view: "development", perm: "development" },
-                { label: "测试", value: c?.testRuns ?? 0, icon: TestTube2, view: "testing", perm: "testing" },
-                { label: "代码库", value: c?.repos ?? 0, icon: FolderGit2, view: "repos", perm: "repos" },
-                { label: "制品", value: c?.artifacts ?? 0, icon: Package, view: "artifacts", perm: "artifacts" },
-                { label: "流水线", value: c?.pipelines ?? 0, icon: GitBranch, view: "pipelines", perm: "pipelines" },
-                { label: "部署", value: c?.deployments ?? 0, icon: Rocket, view: "deployment", perm: "deployment" },
-                { label: "监控", value: c?.monitors ?? 0, icon: Activity, view: "monitoring", perm: "monitoring" },
-              ].filter((s) => can(s.perm)).map((s, i, arr) => (
-                <button
-                  key={s.label}
-                  onClick={() => onNavigate(s.view)}
-                  className="relative rounded-lg border bg-background p-3 text-left hover:border-primary/40 hover:shadow-sm transition-all"
-                >
-                  <s.icon className="w-4 h-4 text-primary mb-2" />
-                  <p className="text-xl font-bold leading-none">{s.value}</p>
-                  <p className="text-[11px] text-muted-foreground mt-1">{s.label}</p>
-                  {i < arr.length - 1 && <ArrowRight className="hidden xl:block absolute -right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/30" />}
-                </button>
-              ))}
-            </div>
+            <DeliveryLoop counts={c} onNavigate={onNavigate} />
           </Card>
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -215,6 +194,150 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: string) => void }) {
         </>
       )}
     </div>
+  );
+}
+
+// 研发交付闭环的十个阶段，按流转顺序排列；最后的「问题」回流到开头的会议与需求。
+const DELIVERY_STAGES: {
+  key: keyof DashboardData["counts"];
+  label: string;
+  icon: LucideIcon;
+  view: string;
+  perm: string;
+}[] = [
+  { key: "meetings", label: "会议", icon: CalendarClock, view: "meetings", perm: "meetings" },
+  { key: "requirements", label: "需求", icon: FileText, view: "requirements", perm: "requirements" },
+  { key: "tasks", label: "任务", icon: ListChecks, view: "development", perm: "development" },
+  { key: "testRuns", label: "测试", icon: TestTube2, view: "testing", perm: "testing" },
+  { key: "repos", label: "代码库", icon: FolderGit2, view: "repos", perm: "repos" },
+  { key: "pipelines", label: "流水线", icon: GitBranch, view: "pipelines", perm: "pipelines" },
+  { key: "artifacts", label: "制品", icon: Package, view: "artifacts", perm: "artifacts" },
+  { key: "deployments", label: "部署", icon: Rocket, view: "deployment", perm: "deployment" },
+  { key: "monitors", label: "监控", icon: Activity, view: "monitoring", perm: "monitoring" },
+  { key: "openAlerts", label: "问题", icon: CircleAlert, view: "alerts", perm: "alerts" },
+];
+
+// ∞ 形轨道：两端半圆收口，上下边线在中间收腰。viewBox 随容器拉伸，描边宽度固定不随拉伸变粗。
+const LOOP_TRACK_PATH =
+  "M120 0H380C440 0 470 28 500 28C530 28 560 0 620 0H880A120 120 0 0 1 880 240H620C560 240 530 212 500 212C470 212 440 240 380 240H120A120 120 0 0 1 120 0Z";
+
+const LOOP_TRACK = (
+  <svg
+    aria-hidden
+    className="pointer-events-none absolute inset-0 h-full w-full text-border"
+    viewBox="0 0 1000 240"
+    preserveAspectRatio="none"
+    fill="none"
+  >
+    <path d={LOOP_TRACK_PATH} stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+  </svg>
+);
+
+/**
+ * 研发交付闭环。宽屏排成 ∞ 形两排：上排从左到右走前一半，右端向下折到下排，
+ * 下排从右往左走完，左端再向上回到会议——这样「问题」正好落在「会议」下方。
+ * 窄屏放不下双排，退回普通网格。
+ */
+function DeliveryLoop({ counts, onNavigate }: { counts?: DashboardData["counts"]; onNavigate: (v: string) => void }) {
+  const stages = DELIVERY_STAGES.filter((s) => can(s.perm));
+  const half = Math.ceil(stages.length / 2);
+  const forward = stages.slice(0, half);
+  const backward = stages.slice(half);
+  const loops = backward.length > 0;
+  const columns = { gridTemplateColumns: `repeat(${Math.max(half, 1)}, minmax(0, 1fr))` };
+
+  return (
+    <>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 xl:hidden">
+        {stages.map((s) => (
+          <StageTile key={s.key} stage={s} value={counts?.[s.key] ?? 0} onNavigate={onNavigate} />
+        ))}
+      </div>
+
+      <div className="relative hidden xl:block mx-auto w-full max-w-[1100px]">
+        {loops && (
+          <>
+            {LOOP_TRACK}
+            {/* 两端半圆内放转向标记：左端点明闭环，右端只是折行。6% 正是半圆的圆心位置。 */}
+            <div aria-hidden className="pointer-events-none absolute left-[6%] top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5 text-[11px] leading-4 text-muted-foreground">
+              <ArrowUp className="w-[18px] h-[18px]" />
+              回到会议
+            </div>
+            <ArrowDown aria-hidden className="pointer-events-none absolute right-[6%] top-1/2 h-[18px] w-[18px] -translate-y-1/2 translate-x-1/2 text-muted-foreground" />
+          </>
+        )}
+        <div className="relative px-[14%] py-9">
+          <div className="grid gap-x-2" style={columns}>
+            {forward.map((s, i) => (
+              <StageTile
+                key={s.key}
+                stage={s}
+                value={counts?.[s.key] ?? 0}
+                onNavigate={onNavigate}
+                arrow={i === forward.length - 1 ? "none" : "right"}
+              />
+            ))}
+          </div>
+          {loops && <LoopCaption className="hidden xl:flex py-2.5" />}
+          {/* 下排从最右列往左占位，DOM 顺序仍是流转顺序，键盘 Tab 也顺着环走。 */}
+          <div className="grid gap-x-2" style={columns}>
+            {backward.map((s, i) => (
+              <StageTile
+                key={s.key}
+                stage={s}
+                value={counts?.[s.key] ?? 0}
+                onNavigate={onNavigate}
+                arrow={i === backward.length - 1 ? "none" : "left"}
+                column={half - i}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {loops && <LoopCaption className="mt-3 flex xl:hidden" />}
+    </>
+  );
+}
+
+function LoopCaption({ className = "" }: { className?: string }) {
+  return (
+    <p className={`items-center justify-center gap-1.5 text-[11px] leading-4 text-muted-foreground ${className}`}>
+      <LoopIcon aria-hidden className="w-3.5 h-3.5 shrink-0" />
+      走完一圈回到起点，进入下一轮
+    </p>
+  );
+}
+
+function StageTile({
+  stage,
+  value,
+  onNavigate,
+  arrow = "none",
+  column,
+}: {
+  /** 列表里的 key。项目未安装 @types/react，自定义组件要在 props 里声明才能通过 tsc（同 common.tsx 的 Pill）。 */
+  key?: string;
+  stage: (typeof DELIVERY_STAGES)[number];
+  value: number;
+  onNavigate: (v: string) => void;
+  /** 与下一格之间的箭头方向；环的两端由轨道上的转向箭头表示，不再画格间箭头。 */
+  arrow?: "right" | "left" | "none";
+  /** 显式指定放在第 1 行从左数第几列（从 1 开始）。下排靠它从右往左占位，不依赖自动排布和 direction。 */
+  column?: number;
+}) {
+  return (
+    <button
+      onClick={() => onNavigate(stage.view)}
+      style={column ? { gridArea: `1 / ${column}` } : undefined}
+      className="relative rounded-lg border bg-background p-3 text-left hover:border-primary/40 hover:shadow-sm transition-all"
+    >
+      <stage.icon className="w-4 h-4 text-primary mb-2" />
+      <p className="text-xl font-bold leading-none">{value}</p>
+      <p className="text-[11px] text-muted-foreground mt-1">{stage.label}</p>
+      {arrow === "right" && <ArrowRight aria-hidden className="pointer-events-none absolute -right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/30" />}
+      {arrow === "left" && <ArrowLeft aria-hidden className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/30" />}
+    </button>
   );
 }
 
