@@ -376,6 +376,12 @@ const activityLabels: Record<string, string> = {
   "monitor.created": "创建了监控",
   "monitor.checked": "执行了健康检查",
   "alert.updated": "处理了告警",
+  "alert.created": "录入了问题",
+  "alert.resent": "重发了告警",
+  "alert.channel.created": "创建了告警通道",
+  "alert.channel.updated": "更新了告警通道",
+  "alert.channel.deleted": "删除了告警通道",
+  "alert.channel.tested": "发送了告警测试消息",
   "chat.message": "与 Agent 对话",
 };
 
