@@ -13,12 +13,13 @@
 ## 核心能力
 
 - **多租户**：用户可搜索团队并申请加入；租户管理员可直接添加成员；超级管理员可管理所有租户（租户创建仅限超级管理员）。所有业务数据按 `tenant_id` 隔离。
-- **租户级 RBAC**：每个租户维护自己的角色与权限，菜单权限与敏感操作权限分离（成员管理、角色管理、密钥查看、生产发布、监控维护、代码库管理/审批）。
+- **租户级 RBAC**：每个租户维护自己的角色与权限，菜单权限与敏感操作权限分离（成员管理、角色管理、密钥查看、生产发布、监控维护、告警通道配置、代码库管理/审批）。
 - **个人 Agent**：成员加入租户后自动获得专属 Agent，在统一对话框中以本人权限执行需求设计、拆解、编码、测试、部署与巡检。
 - **登录治理**：支持微软认证登录（Microsoft Entra ID / Azure AD）与**通用 OIDC 单点登录**（Keycloak / Casdoor / Authing / Okta / Google 等，自动发现端点，配置 Issuer + Client 即用）；超级管理员可随时开关密码登录、自助注册与各三方登录。三方登录按邮箱匹配账号，不存在则自动注册（无密码账号，可在个人设置中补设密码）；关闭密码登录后仅超级管理员保留密码登录逃生口，防止误锁。登录页本地记录近期登录账号，点击即可回填；桌面客户端经 RFC 8252 本机回环在系统浏览器完成三方登录授权。
 - **个人设置**：登录后可自助修改姓名、登录邮箱与密码。
 - **人工闸门**：环境 IP/密码由人工维护并加密存储；查看明文密钥需要 `secret.read`；生产发布需要 `deploy.production`。
 - **完整交付链**：会议提取、原型/架构 JSON、任务看板、Agent 运行记录、制品文件、流水线阶段与日志、部署记录、健康检查与告警。
+- **告警通知**：在「配置 → 告警配置」里添加钉钉 / 企业微信 / 飞书群机器人通道，监控告警、手工录入的问题和状态变化自动推送到群；推送记录可查、失败可重发。有告警中心权限的成员可以录入问题并指定要通知的人。环境配置可以标注操作系统（Linux / Windows）。
 - **代码管理**：租户可关联 GitLab（真实 API 同步；自签名/IP 证书的实例可按连接跳过 TLS 校验），成员浏览全部代码库——管理员令牌同步时自动改为全量可见（含未加入的 internal/private 项目），按访客/报告者/开发者/管理员申请权限，管理员审批、撤销并留痕审计；「项目与系统」的代码库可直接从同步目录选取，名称/地址/分支自动带出。
 - **Agent 运行时（transcode）**：默认经 [ACP 协议](https://agentclientprotocol.com/) 驱动本地 `transcode` CLI——流式对话、真实工具执行、按运行隔离的临时工作区；可选 `claude` / `opencode` CLI。
 
@@ -41,7 +42,7 @@
 trans-once-web-ui/
   components/ui/          # shadcn 基础组件（alias @ 指向 trans-once-web-ui/）
   src/App.tsx             # 登录门禁、租户门禁、权限菜单、页面路由
-  src/views/              # 工作台、项目、需求、代码管理、制品、流水线、环境、监控、告警、智能体
+  src/views/              # 工作台、项目、需求、代码管理、制品、流水线、环境、监控、告警、告警配置、智能体
   src/components/         # 登录、租户选择、团队管理、会议、研发、测试、部署、Agent 对话、个人/平台设置
   src/lib/session.ts      # 认证 / 当前租户 / 权限判断
   src/lib/store.ts        # 租户工作区数据加载与刷新、askAgent 事件
@@ -58,13 +59,16 @@ trans-once/
   oidc_client.py          # 通用 OIDC（发现、授权、令牌交换）
   platform_settings.py    # 平台级登录方式开关（密码/注册/微软/OIDC）
   net_guard.py            # 监控 URL 出站校验（防内网探测）
+  notifiers.py            # 告警消息：钉钉 / 企业微信 / 飞书的消息体、加签、发送（不碰数据库）
+  alert_notify.py         # 告警推送：筛选通道、并行发送、写推送记录
   routers/                # auth / tenants / projects / pipeline / devops / coderepos / agentchat / agent_runtime
   gitlab_client.py        # GitLab REST 客户端（stdlib urllib）
-  migrations/versions/    # 0001 初始链路 … 0009 微软登录（多租户 + RBAC + Agent + 平台表）
+  migrations/versions/    # 0001 初始链路 … 0010 告警通知（多租户 + RBAC + Agent + 平台表 + 告警通道）
   seed.py                 # 幂等初始化超级管理员（不再造演示数据）
   asr_service/            # 可选 ASR 微服务（FunASR，独立依赖，监听 8001）
   tests/smoke.py          # 端到端冒烟测试（stdlib）
   tests/microsoft_flow.py # 微软登录回调离线测试
+  tests/notifiers_flow.py # 告警消息（签名 / 消息体 / 掩码 / 发送）离线测试
 trans-once-desktop/
   electron/main.js        # Electron 主进程：app:// 协议加载 dist/ 并代理 /api、/asr
   README.md               # 桌面客户端使用说明
@@ -138,7 +142,7 @@ npm start                               # 需后端已启动；或 TRANSONCE_AUT
 权限分为两组：
 
 - **菜单权限**：`dashboard`、`projects`、`meetings`、`requirements`、`design`、`development`、`testing`、`repos`、`artifacts`、`pipelines`、`deployment`、`environments`、`monitoring`、`alerts`、`agents`、`team`
-- **敏感操作**：`member.manage`、`role.manage`、`agent.manage`、`env.manage`、`secret.read`、`deploy.production`、`monitor.manage`、`repo.manage`（关联/同步 GitLab）、`repo.approve`（审批代码库权限）
+- **敏感操作**：`member.manage`、`role.manage`、`agent.manage`、`env.manage`、`secret.read`、`deploy.production`、`monitor.manage`、`repo.manage`（关联/同步 GitLab）、`repo.approve`（审批代码库权限）、`alert.channel.manage`（告警通道配置）
 
 执行规则：
 
@@ -179,13 +183,16 @@ python3 trans-once/tests/smoke.py
 # 微软登录回调离线测试（不联网）
 python3 trans-once/tests/microsoft_flow.py
 
+# 告警消息离线测试（不联网、不连数据库）
+python3 trans-once/tests/notifiers_flow.py
+
 # 前端类型检查与生产构建
 cd trans-once-web-ui
 npm run lint
 npm run build
 ```
 
-`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、Agent 对话、会议提取预览与权限目录、个人设置自助、登录方式配置开关、微软登录 URL 构建与通用 OIDC 全链路（内置迷你 IdP：发现→授权→回调→自动注册），共 93 项检查，且不会创建或删除业务实体。`trans-once/tests/microsoft_flow.py` 离线（不联网）验证微软登录回调：state 校验、id_token 校验、按邮箱自动注册/复用账号与无密码账号补设密码。
+`trans-once/tests/smoke.py` 覆盖健康检查、登录、租户成员关系、未知租户拒绝、工作台统计、原型 JSON 有效性、角色权限边界、环境密钥掩码/查看、生产部署闸门、监控检查、告警通道与群推送（钉钉 / 企业微信 / 飞书，内置假机器人）、手工录入问题与重发、监控告警联动、环境操作系统、Agent 对话、会议提取预览与权限目录、个人设置自助、登录方式配置开关、微软登录 URL 构建与通用 OIDC 全链路（内置迷你 IdP：发现→授权→回调→自动注册），共 155 项检查。冒烟脚本会一次性创建并重复使用自己需要的夹具（冒烟租户、账号、环境、告警通道等），除此之外只读；只跑告警一节用 `SMOKE_ONLY=alerts python3 trans-once/tests/smoke.py`。`trans-once/tests/microsoft_flow.py` 离线（不联网）验证微软登录回调：state 校验、id_token 校验、按邮箱自动注册/复用账号与无密码账号补设密码。
 
 ## 主要 API
 
@@ -203,13 +210,14 @@ npm run build
 | 制品/流水线 | `/artifacts`、`/artifacts/{id}/release`、`/pipelines`、`/pipelines/{id}/run`、`/pipeline-runs` |
 | 代码管理 | `/gitlab/connections`、`/gitlab/connections/{id}/sync`、`/repos`、`/repos/{id}/access-requests`、`/repo-access-requests`（列表/审批/拒绝）、`DELETE /repos/{id}/access/{uid}` |
 | 环境/部署 | `/environments`、`/environments/{id}/reveal`、`/deployments` |
-| 监控/告警 | `/monitors`、`/monitors/{id}/check`、`/monitors/check-all`、`/alerts`、`PATCH /alerts/{id}` |
+| 监控/告警 | `/monitors`、`/monitors/{id}/check`、`/monitors/check-all`、`/alerts`、`POST /alerts`（录入问题）、`PATCH /alerts/{id}`、`POST /alerts/{id}/resend`（重发） |
+| 告警通道 | `GET/POST /alert-channels`、`PATCH/DELETE /alert-channels/{id}`、`POST /alert-channels/{id}/test`、`GET /alert-channels/deliveries`（地址和密钥只返回掩码） |
 | Agent 对话 | `/conversations`、`/conversations/{id}/messages`、`POST /chat` |
 
 交互式文档：后端启动后访问 `http://localhost:9005/docs`。
 
 ## 当前阶段
 
-已完成：多租户与 RBAC、个人 Agent、会议提取、需求设计与拆解、任务执行、代码/测试/制品、流水线、部署闸门、环境密钥、监控告警、审计时间线、GitLab 代码管理与权限申请审批、微软 / 通用 OIDC 登录与登录方式开关、个人设置、transcode（ACP）默认 Agent 运行时、前端全量接入真实 API。
+已完成：多租户与 RBAC、个人 Agent、会议提取、需求设计与拆解、任务执行、代码/测试/制品、流水线、部署闸门、环境密钥、监控告警、告警通知（钉钉 / 企业微信 / 飞书群机器人）、审计时间线、GitLab 代码管理与权限申请审批、微软 / 通用 OIDC 登录与登录方式开关、个人设置、transcode（ACP）默认 Agent 运行时、前端全量接入真实 API。
 
 后续可扩展：GitLab 权限代发（审批通过后以令牌调用 Members API 直接开通）、真实 Git/CI 执行器、WebSocket 流式 Agent 输出、对象存储制品包、KMS/Vault、租户级配额与账单、生产发布审批流（当前为权限闸门 + 人工操作）。

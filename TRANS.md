@@ -22,9 +22,10 @@ cd trans-once-web-ui && npm install && npm run dev
 npm run lint        # tsc --noEmit（类型检查）
 npm run build       # vite build → dist/
 
-# 测试（需后端已启动并完成种子）
-python3 trans-once/tests/smoke.py          # 端到端冒烟，93 项检查
+# 测试（冒烟需后端已启动并完成种子）
+python3 trans-once/tests/smoke.py          # 端到端冒烟，155 项检查（SMOKE_ONLY=alerts 只跑告警一节）
 python3 trans-once/tests/microsoft_flow.py # 微软登录回调离线测试
+python3 trans-once/tests/notifiers_flow.py # 告警消息离线测试（签名 / 消息体 / 掩码 / 发送）
 
 # 桌面客户端（可选）
 cd trans-once-desktop && npm install && npm start   # dev / smoke / dist（electron-builder --mac）
@@ -32,9 +33,9 @@ cd trans-once-desktop && npm install && npm start   # dev / smoke / dist（elect
 
 ## Architecture
 
-- `trans-once/` 后端：`main.py` 装配 FastAPI（lifespan 内做 stale run 恢复 + `seed.py` 幂等建超管）；`config.py` 环境变量与权限目录；`deps.py` 提供 `get_current_user` / `load_tenant_context(user, tenant_id, permission)` / `log_activity`；`security.py` 密码哈希、令牌、字段加密；`orchestration.py` Agent 动作与部署闸门；`agents.py` + `acp_agent.py` 运行时分发；`gitlab_client.py`、`microsoft_client.py`、`oidc_client.py`、`platform_settings.py`、`net_guard.py` 为外部集成。
+- `trans-once/` 后端：`main.py` 装配 FastAPI（lifespan 内做 stale run 恢复 + `seed.py` 幂等建超管）；`config.py` 环境变量与权限目录；`deps.py` 提供 `get_current_user` / `load_tenant_context(user, tenant_id, permission)` / `log_activity`；`security.py` 密码哈希、令牌、字段加密；`orchestration.py` Agent 动作与部署闸门；`agents.py` + `acp_agent.py` 运行时分发；`gitlab_client.py`、`microsoft_client.py`、`oidc_client.py`、`platform_settings.py`、`net_guard.py` 为外部集成；`notifiers.py`（告警消息渲染、加签、发送）和 `alert_notify.py`（筛选通道、并行推送、写推送记录）负责告警通知。
 - `trans-once/routers/`：`auth`（`/api/auth`）、`tenants`（`/api`，含成员/角色/加入申请/Agent/工作台）、`projects`、`pipeline`、`devops`、`coderepos`、`agentchat`（均 `/api/tenants/{tenant_id}`）、`agent_runtime`（`/api/agent-runtime`）。
-- `trans-once/migrations/versions/`：`0001` 初始链路 → `0009` 微软登录；新增表/列必须写迁移，启动时检查版本。
+- `trans-once/migrations/versions/`：`0001` 初始链路 → `0010` 告警通知；新增表/列必须写迁移，启动时检查版本。
 - `trans-once-web-ui/` 前端：`src/App.tsx` 登录/租户门禁与权限菜单；`src/views/` 页面；`src/components/` 业务组件；`src/lib/session.ts`（认证/权限）、`store.ts`（租户工作区数据）、`agentModels.ts`；`src/services/api.ts` 唯一 API 客户端；`components/ui/` 为 shadcn 基础组件（alias `@` → 前端根目录）。
 - `trans-once-desktop/electron/main.js`：`app://` 协议加载 `dist/`，主进程代理 `/api`、`/asr`，前端零改动。
 - `docs/ARCHITECTURE.md` 架构与数据模型；`docs/superpowers/{plans,specs}` 设计文档。
