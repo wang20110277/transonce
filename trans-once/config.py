@@ -77,6 +77,7 @@ PERMISSIONS = [
     {"id": "monitor.manage", "label": "监控与告警维护", "group": "敏感操作"},
     {"id": "repo.manage", "label": "代码库连接管理（GitLab）", "group": "敏感操作"},
     {"id": "repo.approve", "label": "审批代码库权限", "group": "敏感操作"},
+    {"id": "alert.channel.manage", "label": "告警通道配置", "group": "敏感操作"},
 ]
 
 MENU_PERMISSIONS = [p["id"] for p in PERMISSIONS if p["group"] == "菜单"]
@@ -128,6 +129,7 @@ ROLE_PRESETS = [
             "dashboard", "repos", "artifacts", "pipelines", "deployment", "environments",
             "monitoring", "alerts", "agents", "env.manage", "secret.read",
             "deploy.production", "monitor.manage", "repo.manage", "repo.approve",
+            "alert.channel.manage",
         ],
     },
     {

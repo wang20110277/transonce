@@ -17,6 +17,8 @@ value before moving on.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -39,6 +41,12 @@ DEV_EMAIL = os.getenv("DEV_EMAIL", "smoke-dev@transonce.local")
 DEV_PASSWORD = os.getenv("DEV_PASSWORD", "smoke-pass-123")
 JOIN_EMAIL = os.getenv("JOIN_EMAIL", "smoke-join@transonce.local")
 JOIN_PASSWORD = os.getenv("JOIN_PASSWORD", "smoke-pass-123")
+# 告警通知一节的夹具：只有告警中心权限的账号，以及假群机器人用的加签密钥。
+ALERT_EMAIL = os.getenv("ALERT_EMAIL", "smoke-alert@transonce.local")
+ALERT_PASSWORD = os.getenv("ALERT_PASSWORD", "smoke-pass-123")
+BOT_SECRET = "SECsmokesecret"
+ISSUE_TITLE = "冒烟：手工录入的问题"
+PROBE_NAME = "冒烟失败探针"
 
 SAMPLE_NOTES = """时间：上午 10:00
 参会人：产品负责人、研发、测试、DevOps
@@ -345,6 +353,35 @@ def ensure_delivery_fixtures(tenant_id: str, admin_token: str) -> None:
             call("POST", f"/api/tenants/{tenant_id}/requirements/{first['id']}/code", {}, token=admin_token)
 
 
+def _summary() -> int:
+    total = passed + len(failed)
+    print(f"\n{'─' * 48}\n{passed}/{total} checks passed")
+    if failed:
+        print("Failed checks:")
+        for name in failed:
+            print(f"  - {name}")
+        return 1
+    print("All smoke checks passed ✓\n")
+    return 0
+
+
+def section_alert_notifications(tenant_id: str, admin: dict, product_token: str, dev_token: str) -> None:
+    """Alert channels (钉钉 / 企业微信 / 飞书), the delivery log, manual issues
+    and the monitor → group push. Fixtures are created once and reused."""
+    print("\n[alert channels & notifications]")
+    admin_token = admin["token"]
+    base = f"/api/tenants/{tenant_id}"
+
+    _, catalog = call("GET", "/api/permissions", token=admin_token, expect=None)
+    items = catalog.get("items") if isinstance(catalog, dict) else (catalog or [])
+    check("permission catalog lists alert.channel.manage",
+          any(i.get("id") == "alert.channel.manage" for i in items or []))
+    _, roles = call("GET", f"{base}/roles", token=admin_token, expect=None)
+    devops = next((r for r in (roles or []) if r.get("name") == "DevOps 工程师"), None)
+    check("DevOps preset role gained alert.channel.manage",
+          bool(devops) and "alert.channel.manage" in (devops.get("permissions") or []))
+
+
 def main() -> int:
     print(f"\nTransOnce smoke test → {API}\n")
 
@@ -371,6 +408,11 @@ def main() -> int:
     check("product can access requirements", "requirements" in perms)
     check("product cannot deploy", "deployment" not in perms)
     check("product cannot manage environments", "environments" not in perms)
+
+    # 只跑告警通知一节（改动相关代码后的快速回归），仍然先完成启动和夹具准备。
+    if os.getenv("SMOKE_ONLY") == "alerts":
+        section_alert_notifications(tenant_id, admin, product_token, dev_token)
+        return _summary()
 
     print("\n[auth & tenancy]")
     _, tenants = call("GET", "/api/tenants", token=product["token"])
@@ -480,6 +522,8 @@ def main() -> int:
     if monitors:
         _, checked = call("POST", f"/api/tenants/{tenant_id}/monitors/{monitors[0]['id']}/check", {}, token=admin["token"])
         check("monitor check returns status", checked.get("status") in ("up", "down", "unknown"), str(checked)[:120])
+
+    section_alert_notifications(tenant_id, admin, product_token, dev_token)
 
     print("\n[agent chat]")
     _, chat = call(
@@ -791,15 +835,7 @@ def main() -> int:
         # The auto-registered smoke-oidc@ account stays as an idempotent fixture
         # (re-runs reuse it via find-or-create, mirroring the other fixtures).
 
-    total = passed + len(failed)
-    print(f"\n{'─' * 48}\n{passed}/{total} checks passed")
-    if failed:
-        print("Failed checks:")
-        for name in failed:
-            print(f"  - {name}")
-        return 1
-    print("All smoke checks passed ✓\n")
-    return 0
+    return _summary()
 
 
 if __name__ == "__main__":
