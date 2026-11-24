@@ -25,6 +25,8 @@ DEFAULT_EVENTS = {"monitor": True, "manual": True, "status": False}
 MAX_BODY_TEXT_BYTES = 3800
 MAX_DETAIL_CHARS = 1000
 MAX_ERROR_CHARS = 300
+# 平台应答只有几百字节的 JSON；读多了没有用处。
+MAX_RESPONSE_BYTES = 65536
 SEND_TIMEOUT_SECONDS = 5
 MASK = "••••••"
 BRAND = "TransOnce"
@@ -184,8 +186,9 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 def _platform_error(provider: str, status: int, raw: bytes) -> str | None:
     """判断平台的一次应答：成功返回 None，否则返回要写进推送记录的错误信息。
 
-    飞书的错误码在 `code`，钉钉和企业微信的在 `errcode`。应答体不是 JSON、或者里面没有错误码时，
-    只能记 `HTTP {状态码}`。非 2xx 的应答体也要看：飞书的签名、token 错误都是以 400 加 JSON 体返回的。
+    飞书的错误码在 `code`，钉钉和企业微信的在 `errcode`。应答体是 JSON 对象且状态码是 2xx、但没有错误码
+    （或错误码为 0）时按成功处理；应答体不是 JSON 对象，或者不是 2xx 又没有错误码可记时，记 `HTTP {状态码}`。
+    非 2xx 的应答体也要看：飞书的签名、token 错误都是以 400 加 JSON 体返回的，错误码和原因都要记下来。
     """
     http_error = f"HTTP {status}"
     try:
@@ -219,7 +222,8 @@ def send(provider: str, webhook: str, secret: str | None, headline: str,
         try:
             with _OPENER.open(request, timeout=SEND_TIMEOUT_SECONDS) as response:
                 result["httpStatus"] = response.status
-                status, raw = response.status, response.read()
+                # 只读前 64KB：地址可以指向内网，对端返回超大响应时不能一直读。
+                status, raw = response.status, response.read(MAX_RESPONSE_BYTES)
         except urllib.error.HTTPError as exc:
             result["httpStatus"] = status = exc.code
             try:

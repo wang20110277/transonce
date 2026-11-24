@@ -157,6 +157,22 @@ def main() -> int:
                 self.send_response(500)
                 self.end_headers()
                 return
+            if self.path.startswith("/html200"):
+                # 状态 200 但应答体不是 JSON：不能当成成功
+                data = b"<html>ok</html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if self.path.startswith("/redirect"):
+                # 302 让我们去别处：不跟随，也不能当成成功
+                self.send_response(302)
+                self.send_header("Location", "/elsewhere")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.path.startswith("/http400"):
                 # 飞书的签名或 token 有问题时，应答是 400 加 JSON 体
                 status, payload = 400, {
@@ -209,6 +225,12 @@ def main() -> int:
               res["status"] == "sent" and str(body.get("timestamp", "")).isdigit() and bool(body.get("sign")))
         check("send posts a JSON body to the webhook",
               seen[0][0] == "/ok?access_token=tok" and json.loads(seen[0][1])["msgtype"] == "markdown")
+        res = send("dingtalk", f"{bot}/html200", None, "标题", ["一"])
+        check("a 2xx answer whose body is not JSON is a failure recorded as HTTP 200",
+              res["status"] == "failed" and res["httpStatus"] == 200 and res["error"] == "HTTP 200", str(res))
+        res = send("wecom", f"{bot}/redirect", None, "标题", ["一"])
+        check("a redirect is not followed and is a failure recorded as HTTP 302",
+              res["status"] == "failed" and res["httpStatus"] == 302 and res["error"] == "HTTP 302", str(res))
     server.shutdown()
 
     total = passed + len(failed)

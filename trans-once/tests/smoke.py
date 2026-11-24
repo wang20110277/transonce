@@ -489,7 +489,8 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     _, channels = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
     channels = channels if isinstance(channels, list) else []
     check("channel list never returns plaintext webhook or secret",
-          bool(channels) and all("webhook" not in c and "secret" not in c for c in channels))
+          bool(channels) and all("webhook" not in c and "secret" not in c for c in channels)
+          and not any(plain in json.dumps(channels) for plain in ("smoke-token", "smoke-key", "SECsmokesecret")))
     check("webhook is masked to host plus last four characters",
           bool(ding) and ding.get("webhookMasked") == f"{bot}/dingtalk?••••••oken",
           str((ding or {}).get("webhookMasked")))
@@ -516,6 +517,11 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     check("wecom rejects a signing secret",
           post_channel({"name": "x", "provider": "wecom", "webhook": f"{bot}/wecom", "secret": "s"}) == 400)
     check("missing webhook rejected", post_channel({"name": "x", "provider": "dingtalk"}) == 400)
+    check("webhook with embedded credentials rejected",
+          post_channel({"name": "x", "provider": "dingtalk", "webhook": "http://user:pass@127.0.0.1/dingtalk"}) == 400)
+    check("link-local webhook rejected",
+          post_channel({"name": "x", "provider": "dingtalk",
+                        "webhook": "http://169.254.169.254/latest/meta-data"}) == 400)
     status, created = call("POST", f"{base}/alert-channels",
                            {"name": "x", "provider": "dingtalk", "webhook": f"{bot}/dingtalk?access_token=sm oke"},
                            token=admin_token, expect=None)
@@ -594,6 +600,22 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
         _, one = call("GET", f"{base}/alert-channels", token=admin_token, expect=None)
         after = next((c for c in (one or []) if c.get("id") == ding["id"]), {})
         check("a new secret replaces the cleared one", after.get("hasSecret") is True)
+
+        # --- 换平台必须重填地址；换到企业微信时密钥清空（企业微信不支持签名） ---
+        status, _ = call("PATCH", f"{base}/alert-channels/{ding['id']}", {"provider": "feishu"},
+                         token=admin_token, expect=None)
+        check("changing the provider requires a new webhook", status == 400, f"status {status}")
+        status, switched = call("PATCH", f"{base}/alert-channels/{ding['id']}",
+                                {"provider": "wecom", "webhook": f"{bot}/wecom?key=switched"},
+                                token=admin_token, expect=None)
+        check("switching to wecom clears the secret",
+              status == 200 and isinstance(switched, dict) and switched.get("hasSecret") is False,
+              f"status {status} {str(switched)[:160]}")
+        # 改回原样。还原失败会直接报错，免得后面的检查因为夹具不对而莫名失败。
+        call("PATCH", f"{base}/alert-channels/{ding['id']}",
+             {"provider": "dingtalk", "webhook": f"{bot}/dingtalk?access_token=smoke-token", "secret": BOT_SECRET,
+              "events": {"monitor": True, "manual": True, "status": False}},
+             token=admin_token)
         status, _ = call("DELETE", f"{base}/alert-channels/{failing['id']}", token=admin_token, expect=None)
         check("channel can be deleted", status == 200, f"status {status}")
         _, log = call("GET", f"{base}/alert-channels/deliveries", token=admin_token, expect=None)
@@ -759,6 +781,13 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
           and all(d.get("status") == "sent" for d in alert.get("deliveries") or []),
           str(alert.get("deliveries"))[:160])
 
+    # --- 监控一直失败时不重复生成、不重复推送 ---
+    _FakeBotHandler.requests.clear()
+    call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
+    check("a second failed check pushes nothing", paths_since() == [], str(paths_since()))
+    open_probe = [a for a in alerts_listed() if a.get("monitorId") == probe_id and a.get("status") == "open"]
+    check("a second failed check creates no second alert", len(open_probe) == 1, str(len(open_probe)))
+
     call("PATCH", f"{base}/monitors/{probe_id}", {"url": f"{API}/api/health"}, token=admin_token, expect=None)
     _FakeBotHandler.requests.clear()
     _, checked = call("POST", f"{base}/monitors/{probe_id}/check", {}, token=admin_token, expect=None)
@@ -815,6 +844,11 @@ def section_alert_notifications(tenant_id: str, admin: dict, product_token: str,
     status, _ = call("PATCH", f"{base}/environments/{throwaway_id}", {"osType": "windows"},
                      token=admin_token, expect=None)
     check("operating system can be switched to windows",
+          status == 200 and next(
+              (e.get("osType") for e in envs_now() if e.get("id") == throwaway_id), None) == "windows")
+    status, _ = call("PATCH", f"{base}/environments/{throwaway_id}", {"name": throwaway_name},
+                     token=admin_token, expect=None)
+    check("an update without osType keeps the operating system",
           status == 200 and next(
               (e.get("osType") for e in envs_now() if e.get("id") == throwaway_id), None) == "windows")
     status, _ = call("DELETE", f"{base}/environments/{throwaway_id}", token=admin_token, expect=None)

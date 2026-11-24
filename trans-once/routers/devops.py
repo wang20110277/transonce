@@ -388,7 +388,10 @@ def _uuid_list(values, label: str) -> list[str]:
 def _channel_fields(body: dict, current: dict | None) -> dict:
     """校验新建 / 修改通道的请求体，返回要写入的列。`current` 为 None 表示新建。"""
     base = current or {}
-    name = (body.get("name") or base.get("name") or "").strip()
+    raw_name = body.get("name")
+    if raw_name is not None and not isinstance(raw_name, str):
+        raise HTTPException(400, "通道名称必须是字符串")
+    name = (raw_name or base.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "请输入通道名称")
     if len(name) > 50:
@@ -397,25 +400,38 @@ def _channel_fields(body: dict, current: dict | None) -> dict:
     if provider not in notifiers.PROVIDERS:
         raise HTTPException(400, "不支持的平台，仅支持钉钉、企业微信、飞书")
     fields: dict = {"name": name, "provider": provider}
-    webhook = (body.get("webhook") or "").strip()
+    raw_webhook = body.get("webhook")
+    if raw_webhook is not None and not isinstance(raw_webhook, str):
+        raise HTTPException(400, "Webhook 地址必须是字符串")
+    webhook = (raw_webhook or "").strip()
     if webhook:
         # 夹了空白或控制字符的地址能通过解析，但发送前就会失败，异常文本还会带出路径里的凭证。
         if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in webhook):
             raise HTTPException(400, "Webhook 地址不能包含空白或控制字符")
+        try:
+            parts = urllib.parse.urlsplit(webhook)
+        except ValueError as e:  # 例如 http://[
+            raise HTTPException(400, "Webhook 地址格式不正确") from e
         # 内网地址放行（企业微信、飞书有私有化网关）：把地址自己的主机名放进白名单。
-        host = (urllib.parse.urlsplit(webhook).hostname or "").strip("[]").lower()
+        host = (parts.hostname or "").strip("[]").lower()
         try:
             fields["webhook_enc"] = encrypt_secret(net_guard.validate_url(webhook, {host}))
         except net_guard.UnsafeTarget as e:
             raise HTTPException(400, f"Webhook 地址不被允许：{e}") from e
     elif current is None:
         raise HTTPException(400, "请输入 Webhook 地址")
+    elif provider != current["provider"]:
+        # 各平台的地址格式不同，换了平台还沿用旧地址只会在发送时失败。
+        raise HTTPException(400, "更换平台时请重新填写 Webhook 地址")
     # 密钥三态：不传保留，空串清除，非空替换。
     if body.get("secret") is not None:
         secret = str(body["secret"]).strip()
         if secret and provider == "wecom":
             raise HTTPException(400, "企业微信群机器人不支持签名，无需填写密钥")
         fields["secret_enc"] = encrypt_secret(secret)
+    elif provider == "wecom" and base.get("secret_enc"):
+        # 企业微信不支持签名：换到企业微信而请求体没带密钥时，把原来的密钥一并清掉。
+        fields["secret_enc"] = None
     if "enabled" in body:
         fields["enabled"] = bool(body.get("enabled"))
     if "events" in body:
@@ -467,10 +483,16 @@ def update_alert_channel(tenant_id: str, channel_id: str, body: dict = Body(...)
     fields = _channel_fields(body, channel)
     labels = {"name": "name", "provider": "provider", "webhook_enc": "webhook", "secret_enc": "secret",
               "enabled": "enabled", "events": "events"}
-    changed = [
-        labels[column] for column in fields
-        if fields[column] != (channel.get("events") or {} if column == "events" else channel.get(column))
-    ]
+
+    def unchanged(column: str) -> bool:
+        # 地址和密钥按解密后的明文比较：每次加密的密文都不同，直接比密文会把没改的记成改动。
+        if column in ("webhook_enc", "secret_enc"):
+            return decrypt_secret(fields[column]) == decrypt_secret(channel.get(column))
+        if column == "events":
+            return fields[column] == (channel.get("events") or {})
+        return fields[column] == channel.get(column)
+
+    changed = [labels[column] for column in fields if not unchanged(column)]
     assignments = ", ".join(f"{column}=%s" for column in fields) + ", updated_at=now()"
     values = [Json(fields[column]) if column == "events" else fields[column] for column in fields]
     row = db.execute_returning(
@@ -512,8 +534,9 @@ def list_alert_deliveries(
     sql = "SELECT * FROM alert_deliveries WHERE tenant_id=%s"
     args: list = [tenant_id]
     if channelId:
+        # 这一列是 uuid 类型：不是合法 UUID 时在这里拒绝，不让它变成数据库错误。
         sql += " AND channel_id=%s"
-        args.append(channelId)
+        args.append(_uuid_list([channelId], "通道")[0])
     sql += " ORDER BY created_at DESC LIMIT %s"
     args.append(limit)
     return [serializers.alert_delivery(r) for r in db.fetch_all(sql, tuple(args))]

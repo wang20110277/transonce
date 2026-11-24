@@ -119,16 +119,24 @@ def notify(tenant_id: str, event: str, alert: dict, actor_id: str | None = None,
 
         rows = []
         for channel, result in zip(targets, results):
-            rows.append(db.execute_returning(
-                """INSERT INTO alert_deliveries
-                   (tenant_id, alert_id, channel_id, channel_name, provider, event, status,
-                    http_status, error, duration_ms, created_by)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
-                (
-                    tenant_id, alert["id"], channel["id"], channel["name"], channel["provider"], event,
-                    result["status"], result["httpStatus"], result["error"], result["durationMs"], actor_id,
-                ),
-            ))
+            # 逐条写并各自兜底：某一条写不进去时记错误日志并继续，别让其它通道已经发出去的记录一起丢失。
+            try:
+                row = db.execute_returning(
+                    """INSERT INTO alert_deliveries
+                       (tenant_id, alert_id, channel_id, channel_name, provider, event, status,
+                        http_status, error, duration_ms, created_by)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+                    (
+                        tenant_id, alert["id"], channel["id"], channel["name"], channel["provider"], event,
+                        result["status"], result["httpStatus"], result["error"], result["durationMs"], actor_id,
+                    ),
+                )
+            except Exception:
+                log.exception("alert delivery not recorded: tenant=%s alert=%s channel=%s event=%s status=%s",
+                              tenant_id, alert.get("id"), channel.get("id"), event, result.get("status"))
+                continue
+            if row:
+                rows.append(row)
         return rows
     except Exception:
         log.exception("alert notification failed: tenant=%s event=%s alert=%s",
