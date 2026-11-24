@@ -14,20 +14,32 @@ import { Modal } from "../components/common";
 import { api } from "../services/api";
 import { useSession } from "../lib/session";
 import { askAgent, refreshWorkspace, useWorkspace } from "../lib/store";
-import type { Alert, AlertDelivery } from "../types";
+import type { Alert, AlertChannelEvent, AlertDelivery } from "../types";
 
-// 推送记录按时间倒序，每个通道只留最近一条，卡片上显示「每个通道的推送结果」。
-function latestPerChannel(deliveries: AlertDelivery[]): AlertDelivery[] {
-  const seen = new Set<string>();
-  const out: AlertDelivery[] = [];
+// 推送记录按时间倒序，卡片上每个通道显示一条。优先取这条告警自己那一类事件（监控告警对应 monitor、
+// 手工录入对应 manual）的最近一次结果；这个通道没有这类记录时，才显示它其它事件（例如状态变化）的最近一次。
+// 否则订阅了「状态变化」的通道会在确认 / 解决后盖住原来的推送结果和失败原因。
+function latestPerChannel(deliveries: AlertDelivery[], ownEvent: AlertChannelEvent): AlertDelivery[] {
+  const order: string[] = [];
+  const own = new Map<string, AlertDelivery>();
+  const latest = new Map<string, AlertDelivery>();
   for (const d of deliveries ?? []) {
     const key = d.channelId ?? d.channelName;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(d);
+    if (!latest.has(key)) {
+      latest.set(key, d);
+      order.push(key);
+    }
+    if (d.event === ownEvent && !own.has(key)) own.set(key, d);
   }
-  return out;
+  // 顺序不变：按每个通道最近一次推送的时间，新的在前。
+  return order.flatMap((key) => {
+    const chosen = own.get(key) ?? latest.get(key);
+    return chosen ? [chosen] : [];
+  });
 }
+
+// 结果提示的语气：有失败时用琥珀色，全部成功或没有推送时是绿色。
+type Notice = { text: string; tone: "ok" | "warn" };
 
 export function Alerts() {
   const tenant = useSession((s) => s.currentTenant)!;
@@ -42,7 +54,7 @@ export function Alerts() {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const tid = tenant.tenant.id;
   const myId = user?.id;
 
@@ -80,10 +92,11 @@ export function Alerts() {
       const sent = res.deliveries.filter((d) => d.status === "sent").length;
       setNotice(
         total === 0
-          ? "没有符合条件（启用且已订阅）的通道，这次没有推送。可以到「告警配置」里检查通道。"
+          // 只有告警中心权限的成员没有「告警配置」这个入口，不能让他们自己去检查通道。
+          ? { text: "没有符合条件（启用且已订阅）的通道，这次没有推送。可以请有『告警配置』权限的同事检查通道。", tone: "ok" }
           : sent === total
-            ? `已重新推送到 ${sent} 个群。`
-            : `重新推送：${sent} 个群成功，${total - sent} 个失败，原因见卡片。`,
+            ? { text: `已重新推送到 ${sent} 个群。`, tone: "ok" }
+            : { text: `重新推送：${sent} 个群成功，${total - sent} 个失败，原因见卡片。`, tone: "warn" },
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -96,14 +109,18 @@ export function Alerts() {
   const saved = async (created: Alert, push: boolean) => {
     const deliveries = created.deliveries ?? [];
     const sent = deliveries.filter((d) => d.status === "sent").length;
+    const failed = deliveries.length - sent;
     setCreating(false);
     await refreshWorkspace();
     setNotice(
       !push || deliveries.length === 0
-        ? "问题已录入，未推送到群。"
+        ? { text: "问题已录入，未推送到群。", tone: "ok" }
         : sent === 0
-          ? "问题已录入，但推送到群失败，原因见卡片，可以在卡片上重发。"
-          : `问题已录入，已推送到 ${sent} 个群${sent < deliveries.length ? `，${deliveries.length - sent} 个失败，可以在卡片上重发` : ""}。`,
+          ? { text: "问题已录入，但推送到群失败，原因见卡片，可以在卡片上重发。", tone: "warn" }
+          : {
+            text: `问题已录入，已推送到 ${sent} 个群${failed ? `，${failed} 个失败，可以在卡片上重发` : ""}。`,
+            tone: failed ? "warn" : "ok",
+          },
     );
   };
 
@@ -111,7 +128,7 @@ export function Alerts() {
     <div className="space-y-5">
       <PageHeader
         title="告警中心"
-        description="监控失败会生成告警，也可以手工录入问题并通知相关成员；确认与解决动作会记录处理人和时间，形成运维闭环。"
+        description="监控失败会生成告警，也可以手工录入问题并通知相关成员；确认与解决都会记录处理人和时间。"
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => refreshWorkspace()}><RefreshCw className="w-4 h-4 mr-2" /> 刷新</Button>
@@ -121,7 +138,11 @@ export function Alerts() {
       />
 
       {error && <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-4 py-2">{error}</div>}
-      {notice && <div className="text-sm text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 rounded-lg px-4 py-2">{notice}</div>}
+      {notice && (
+        <div className={`text-sm rounded-lg px-4 py-2 ${notice.tone === "warn" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"}`}>
+          {notice.text}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard icon={Bell} label="全部告警" value={alerts.length} tone="blue" />
@@ -162,8 +183,10 @@ export function Alerts() {
       ) : (
         <div className="space-y-2">
           {filtered.map((a) => {
-            const latest = latestPerChannel(a.deliveries);
+            const latest = latestPerChannel(a.deliveries, a.source === "manual" ? "manual" : "monitor");
             const notified = a.notifiedUsers ?? [];
+            // 同一张卡片上的操作互斥：任一操作进行中，四个按钮都置灰，转圈只出现在被点的那个上。
+            const working = busy === a.id || busy === `resend-${a.id}`;
             return (
               <Card key={a.id} className={`p-4 ${a.status === "open" ? "border-l-4 border-l-amber-400" : a.status === "resolved" ? "opacity-70" : ""}`}>
                 <div className="flex flex-wrap items-start gap-3">
@@ -208,7 +231,7 @@ export function Alerts() {
                         {latest.map((d) => (
                           <span
                             key={d.id}
-                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] break-all ${d.status === "sent" ? "border-emerald-500/30 text-emerald-700 dark:text-emerald-300" : "border-rose-500/30 text-rose-700 dark:text-rose-300"}`}
+                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] wrap-anywhere ${d.status === "sent" ? "border-emerald-500/30 text-emerald-700 dark:text-emerald-300" : "border-rose-500/30 text-rose-700 dark:text-rose-300"}`}
                           >
                             {d.status === "sent" ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <XCircle className="w-3 h-3 shrink-0" />}
                             {alertProviderLabel[d.provider] ?? d.provider} · {d.channelName}{d.channelId ? "" : "（通道已删除）"}
@@ -220,22 +243,22 @@ export function Alerts() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {a.status === "open" && (
-                      <Button size="sm" variant="outline" disabled={busy === a.id} onClick={() => update(a.id, "acknowledged")}>
+                      <Button size="sm" variant="outline" disabled={working} onClick={() => update(a.id, "acknowledged")}>
                         {busy === a.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "确认"}
                       </Button>
                     )}
                     {a.status !== "resolved" && (
-                      <Button size="sm" disabled={busy === a.id} onClick={() => update(a.id, "resolved")}>
+                      <Button size="sm" disabled={working} onClick={() => update(a.id, "resolved")}>
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> 解决
                       </Button>
                     )}
                     {a.status !== "open" && (
-                      <Button size="sm" variant="ghost" disabled={busy === a.id} onClick={() => update(a.id, "open")}>重新打开</Button>
+                      <Button size="sm" variant="ghost" disabled={working} onClick={() => update(a.id, "open")}>重新打开</Button>
                     )}
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={busy === `resend-${a.id}`}
+                      disabled={working}
                       onClick={() => resend(a)}
                       aria-label={`重发告警 ${a.title}`}
                     >

@@ -107,7 +107,7 @@ export function AlertSettings() {
         description="配置钉钉 / 企业微信 / 飞书群机器人，监控告警和录入的问题会自动推送到对应的群。"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => refreshWorkspace()}><RefreshCw className="w-4 h-4 mr-2" /> 刷新</Button>
+            <Button variant="outline" size="sm" onClick={() => { refreshWorkspace(); reloadDeliveries(); }}><RefreshCw className="w-4 h-4 mr-2" /> 刷新</Button>
             <Button size="sm" onClick={() => setCreating(true)}><Plus className="w-4 h-4 mr-2" /> 新建通道</Button>
           </>
         }

@@ -96,7 +96,8 @@ export function Environments() {
                     <Server className="w-5 h-5" />
                   </div>
                   <div>
-                    <p className="font-semibold flex items-center gap-2">{env.name}
+                    {/* 空间不够时让标识整体换到下一行，而不是把环境名从中间拆开。 */}
+                    <p className="font-semibold flex flex-wrap items-center gap-2">{env.name}
                       <Pill tone={env.kind === "production" ? "rose" : env.kind === "test" ? "green" : "blue"}>{env.kind}</Pill>
                       <Pill tone="gray">{statusLabel[osOf(env)]}</Pill>
                     </p>
