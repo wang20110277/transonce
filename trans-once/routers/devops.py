@@ -75,13 +75,13 @@ def update_environment(tenant_id: str, environment_id: str, body: dict = Body(..
     row = db.execute_returning(
         """UPDATE environments
            SET name=%s, kind=%s, base_url=%s, ip=%s, username=%s, password_enc=%s, config=%s, os_type=%s
-           WHERE id=%s RETURNING *""",
+           WHERE id=%s AND tenant_id=%s RETURNING *""",
         (
             body.get("name") or env["name"], body.get("kind", env["kind"]),
             body.get("baseUrl", env.get("base_url")), body.get("ip", env.get("ip")),
             body.get("username", env.get("username")), password_enc,
             Json(body.get("config") if body.get("config") is not None else env.get("config") or {}),
-            os_type, environment_id,
+            os_type, environment_id, tenant_id,
         ),
     )
     log_activity(ctx, "environment.updated", {"name": row["name"]})
@@ -92,7 +92,7 @@ def update_environment(tenant_id: str, environment_id: str, body: dict = Body(..
 def delete_environment(tenant_id: str, environment_id: str, user: dict = Depends(get_current_user)):
     ctx = load_tenant_context(user, tenant_id, "env.manage")
     env = _env_or_404(tenant_id, environment_id)
-    db.execute("DELETE FROM environments WHERE id=%s", (environment_id,))
+    db.execute("DELETE FROM environments WHERE id=%s AND tenant_id=%s", (environment_id, tenant_id))
     log_activity(ctx, "environment.deleted", {"name": env["name"]})
     return {"ok": True}
 
