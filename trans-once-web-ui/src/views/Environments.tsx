@@ -6,7 +6,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PageHeader, EmptyState, Pill, Select, Textarea, formatDate } from "../components/common";
+import { PageHeader, EmptyState, Pill, Select, Textarea, formatDate, statusLabel } from "../components/common";
 import { Modal } from "../components/TeamSelect";
 import { api } from "../services/api";
 import { can, useSession } from "../lib/session";
@@ -19,11 +19,14 @@ export function Environments() {
   const [editing, setEditing] = useState<Environment | null>(null);
   const [creating, setCreating] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [osFilter, setOsFilter] = useState("all");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const tid = tenant.tenant.id;
   const manage = can("env.manage");
   const canRead = can("secret.read");
+  const osOf = (env: Environment) => env.osType ?? "linux";
+  const shown = osFilter === "all" ? environments : environments.filter((e) => osOf(e) === osFilter);
 
   const reveal = async (env: Environment) => {
     setBusy(env.id);
@@ -68,13 +71,24 @@ export function Environments() {
         <p>安全约定：环境凭证以 AES/HMAC 密钥加密落库；接口默认只返回掩码（••••••XX）。生产部署、查看密钥、修改环境均需要独立的敏感操作权限。</p>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span>操作系统</span>
+        <Select id="env-os-filter" value={osFilter} onChange={setOsFilter}>
+          <option value="all">全部</option>
+          <option value="linux">Linux</option>
+          <option value="windows">Windows</option>
+        </Select>
+      </div>
+
       {!environments.length ? (
         <EmptyState icon={Server} title="还没有配置环境" description={manage ? "创建开发/测试/生产环境，供流水线部署与健康监控使用。" : "请联系租户管理员配置环境。"} action={
           manage ? <Button size="sm" className="mt-2" onClick={() => setCreating(true)}><Plus className="w-4 h-4 mr-2" /> 新建环境</Button> : undefined
         } />
+      ) : !shown.length ? (
+        <EmptyState icon={Server} title={`没有 ${statusLabel[osFilter]} 环境`} description="把筛选改回「全部」可以查看所有环境。" />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {environments.map((env) => (
+          {shown.map((env) => (
             <Card key={env.id} className="p-5">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex gap-3">
@@ -84,13 +98,14 @@ export function Environments() {
                   <div>
                     <p className="font-semibold flex items-center gap-2">{env.name}
                       <Pill tone={env.kind === "production" ? "rose" : env.kind === "test" ? "green" : "blue"}>{env.kind}</Pill>
+                      <Pill tone="gray">{statusLabel[osOf(env)]}</Pill>
                     </p>
                     <p className="text-[11px] text-muted-foreground mt-1">创建于 {formatDate(env.createdAt)}</p>
                   </div>
                 </div>
                 {manage && (
                   <div className="flex gap-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditing(env)}><Pencil className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`编辑环境 ${env.name}`} onClick={() => setEditing(env)}><Pencil className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => remove(env)}><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 )}
@@ -160,6 +175,7 @@ function EnvironmentModal({ env, onClose, onSaved }: { env: Environment | null; 
   const [form, setForm] = useState({
     name: env?.name ?? "",
     kind: env?.kind ?? "test",
+    osType: env?.osType ?? "linux",
     baseUrl: env?.baseUrl ?? "",
     ip: env?.ip ?? "",
     username: env?.username ?? "",
@@ -176,6 +192,7 @@ function EnvironmentModal({ env, onClose, onSaved }: { env: Environment | null; 
       const body = {
         name: form.name,
         kind: form.kind,
+        osType: form.osType,
         baseUrl: form.baseUrl || null,
         ip: form.ip || null,
         username: form.username || null,
@@ -195,7 +212,7 @@ function EnvironmentModal({ env, onClose, onSaved }: { env: Environment | null; 
   return (
     <Modal title={env ? `编辑环境：${env.name}` : "新建环境"} onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <label className="text-sm font-medium">环境名称</label>
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1.5" placeholder="例如：预发环境" />
@@ -207,6 +224,13 @@ function EnvironmentModal({ env, onClose, onSaved }: { env: Environment | null; 
               <option value="test">测试</option>
               <option value="staging">预发</option>
               <option value="production">生产</option>
+            </Select>
+          </div>
+          <div>
+            <label htmlFor="env-os" className="text-sm font-medium">操作系统</label>
+            <Select id="env-os" value={form.osType} onChange={(v) => setForm({ ...form, osType: v as "linux" | "windows" })} className="mt-1.5 w-full h-10">
+              <option value="linux">Linux</option>
+              <option value="windows">Windows</option>
             </Select>
           </div>
         </div>
