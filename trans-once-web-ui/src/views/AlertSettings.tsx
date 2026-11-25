@@ -104,7 +104,7 @@ export function AlertSettings() {
     <div className="space-y-5">
       <PageHeader
         title="告警配置"
-        description="配置钉钉 / 企业微信 / 飞书群机器人，监控告警和录入的问题会自动推送到对应的群。"
+        description="配置钉钉 / 企微 / 飞书群机器人，监控告警和录入的问题会自动推送到对应的群。"
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => { refreshWorkspace(); reloadDeliveries(); }}><RefreshCw className="w-4 h-4 mr-2" /> 刷新</Button>
@@ -196,7 +196,7 @@ function ChannelCard({
               <span className="break-all">
                 {signs
                   ? (channel.hasSecret ? `已加签 ${channel.secretMasked ?? ""}` : "未加签，请在机器人的安全设置里配置关键词")
-                  : "企业微信群机器人不需要密钥"}
+                  : "企微群机器人不需要密钥"}
               </span>
             </p>
           </div>
@@ -361,7 +361,7 @@ function ChannelModal({ channel, onClose, onSaved }: {
         <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1.5">
           <p><span className="text-foreground font-medium">获取地址：</span>在群里打开「群设置 → 群机器人 → 自定义机器人」，添加后复制 Webhook 地址。</p>
           <p><span className="text-foreground font-medium">关键词校验：</span>消息标题都以「TransOnce」开头，在钉钉、飞书的安全设置里把关键词设为 TransOnce 即可。</p>
-          <p><span className="text-foreground font-medium">频率限制：</span>钉钉、企业微信每个机器人每分钟 20 条（钉钉超限后会被限流 10 分钟），飞书每分钟 100 条、每秒 5 条。</p>
+          <p><span className="text-foreground font-medium">频率限制：</span>钉钉、企微每个机器人每分钟 20 条（钉钉超限后会被限流 10 分钟），飞书每分钟 100 条、每秒 5 条。</p>
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end gap-2 border-t pt-3">

@@ -339,7 +339,7 @@ export function SwitchRow({
   );
 }
 
-export const alertProviderLabel: Record<string, string> = { dingtalk: "钉钉", wecom: "企业微信", feishu: "飞书" };
+export const alertProviderLabel: Record<string, string> = { dingtalk: "钉钉", wecom: "企微", feishu: "飞书" };
 export const alertEventLabel: Record<string, string> = {
   monitor: "监控告警", manual: "手工问题", status: "状态变化", test: "测试消息",
 };

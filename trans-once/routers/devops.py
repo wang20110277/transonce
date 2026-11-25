@@ -398,7 +398,7 @@ def _channel_fields(body: dict, current: dict | None) -> dict:
         raise HTTPException(400, "通道名称不超过 50 个字")
     provider = body.get("provider") or base.get("provider")
     if provider not in notifiers.PROVIDERS:
-        raise HTTPException(400, "不支持的平台，仅支持钉钉、企业微信、飞书")
+        raise HTTPException(400, "不支持的平台，仅支持钉钉、企微、飞书")
     fields: dict = {"name": name, "provider": provider}
     raw_webhook = body.get("webhook")
     if raw_webhook is not None and not isinstance(raw_webhook, str):
@@ -427,7 +427,7 @@ def _channel_fields(body: dict, current: dict | None) -> dict:
     if body.get("secret") is not None:
         secret = str(body["secret"]).strip()
         if secret and provider == "wecom":
-            raise HTTPException(400, "企业微信群机器人不支持签名，无需填写密钥")
+            raise HTTPException(400, "企微群机器人不支持签名，无需填写密钥")
         fields["secret_enc"] = encrypt_secret(secret)
     elif provider == "wecom" and base.get("secret_enc"):
         # 企业微信不支持签名：换到企业微信而请求体没带密钥时，把原来的密钥一并清掉。
