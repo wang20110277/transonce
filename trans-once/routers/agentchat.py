@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Body, Depends, HTTPException
 from psycopg2.extras import Json
 
+import acp_agent
 import db
 import orchestration
 import serializers
@@ -141,3 +142,11 @@ def quick_chat(tenant_id: str, body: dict = Body(...), user: dict = Depends(get_
         "userMessage": serializers.message(user_msg),
         "assistantMessage": assistant,
     }
+
+
+@router.post("/conversations/{conversation_id}/cancel")
+def cancel_reply(tenant_id: str, conversation_id: str, user: dict = Depends(get_current_user)):
+    """停止该对话正在生成的回复（transcode session/cancel）。"""
+    _conversation_or_404(tenant_id, conversation_id, user)
+    hit = acp_agent.cancel(f"chat:{conversation_id}")
+    return {"cancelled": hit}

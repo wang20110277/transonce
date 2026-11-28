@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader, EmptyState, StatusPill, Pill, Select, Textarea, timeAgo, statusLabel } from "../components/common";
 import { api } from "../services/api";
-import { RUNTIME_OPTIONS, useAgentRuntime, runtimeHint, modelPlaceholder } from "../lib/agentModels";
+import { RUNTIME_OPTIONS, useAgentRuntime, runtimeHint, modelPlaceholder, type RuntimeModel } from "../lib/agentModels";
 import { can, isAdmin, useSession } from "../lib/session";
 import { askAgent, refreshWorkspace, useWorkspace } from "../lib/store";
 
@@ -167,17 +167,37 @@ export function MyAgent() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">模型（可选）</label>
-              <Input
-                value={current.model}
-                disabled={!editable || runtimeInfo?.supported === false}
-                onChange={(e) => setForm({ ...current, model: e.target.value })}
-                className="mt-1"
-                list="agent-model-options"
-                placeholder={modelPlaceholder(current.provider)}
-              />
-              <datalist id="agent-model-options">
-                {(runtimeInfo?.models ?? []).map((m) => <option key={m.id} value={m.id} />)}
-              </datalist>
+              {(runtimeInfo?.models ?? []).length > 0 ? (
+                <Select
+                  value={current.model}
+                  disabled={!editable || runtimeInfo?.supported === false}
+                  onChange={(v) => setForm({ ...current, model: v })}
+                  className="mt-1 w-full"
+                >
+                  <option value="">默认（跟随运行时）</option>
+                  {Object.entries(
+                    (runtimeInfo?.models ?? []).reduce<Record<string, RuntimeModel[]>>((acc, m) => {
+                      const g = m.id.includes(":") ? m.id.split(":")[0] : m.provider || "其它";
+                      (acc[g] ||= []).push(m);
+                      return acc;
+                    }, {}),
+                  ).map(([provider, group]) => (
+                    <optgroup key={provider} label={provider}>
+                      {group.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name && m.name !== m.id ? m.name : m.id}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  value={current.model}
+                  disabled={!editable || runtimeInfo?.supported === false}
+                  onChange={(e) => setForm({ ...current, model: e.target.value })}
+                  className="mt-1"
+                  placeholder={modelPlaceholder(current.provider)}
+                />
+              )}
               {runtimeHint(runtimeInfo) && <p className="text-[11px] text-muted-foreground mt-1">{runtimeHint(runtimeInfo)}</p>}
             </div>
           </div>

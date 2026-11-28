@@ -12,7 +12,53 @@ import selectors
 import shutil
 import signal
 import subprocess
+import tempfile
+import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 import time
+
+
+class AgentCancelled(RuntimeError):
+    """用户主动取消（transcode session/cancel → stopReason=cancelled）。"""
+
+
+# --- 运行中连接注册表：按业务 key（chat:{会话id} / {stage}:{需求id}）登记，
+# 取消接口据此向正在跑的 ACP 会话发 session/cancel 通知。
+_active_conns: dict[str, "_AcpConn"] = {}
+_active_lock = threading.Lock()
+_cancel_key: ContextVar[str | None] = ContextVar("acp_cancel_key", default=None)
+
+
+@contextmanager
+def cancel_scope(key: str):
+    """在作用域内把当前线程的 ACP 连接登记到 key 下（同线程内深层调用可见）。"""
+    token = _cancel_key.set(key)
+    try:
+        yield
+    finally:
+        _cancel_key.reset(token)
+        with _active_lock:
+            _active_conns.pop(key, None)
+
+
+def cancel(key: str) -> bool:
+    """向 key 对应的进行中运行发送取消通知；命中返回 True。"""
+    with _active_lock:
+        conn = _active_conns.get(key)
+        if conn is None:
+            return False
+        conn.cancel()
+        return True
+
+
+def cancel_matching(suffix: str) -> list[str]:
+    """取消 key 以 suffix 结尾的全部运行（pipeline 按需求 id 取消任意阶段）。"""
+    with _active_lock:
+        keys = [k for k in _active_conns if k.endswith(suffix)]
+        for k in keys:
+            _active_conns[k].cancel()
+    return keys
 
 
 def resolve_transcode_cli() -> tuple[str | None, str | None]:
@@ -53,6 +99,7 @@ class _AcpConn:
         )
         self._next_id = 0
         self._stderr_tail: list[str] = []
+        self.session_id: str | None = None
 
     def close(self) -> None:
         for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
@@ -68,6 +115,14 @@ class _AcpConn:
     def _send(self, payload: dict) -> None:
         self.proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self.proc.stdin.flush()
+
+    def _notify(self, method: str, params: dict) -> None:
+        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def cancel(self) -> None:
+        """向本连接当前的会话发 session/cancel（transcode 0.12.19+ 支持）。"""
+        if self.session_id:
+            self._notify("session/cancel", {"sessionId": self.session_id})
 
     def _respond(self, request_id, result: dict) -> None:
         self._send({"jsonrpc": "2.0", "id": request_id, "result": result})
@@ -154,6 +209,43 @@ class _AcpConn:
         return "".join(self._stderr_tail[-20:])[-limit:]
 
 
+def list_models(timeout_s: float = 20.0) -> dict:
+    """Enumerate transcode models → {availableModels: [...], currentModelId}.
+
+    首选 ACP `agent/models`（transcode 0.12.19+，免会话、开销小）；旧版没有
+    该方法时退回 session/new（顺带拿到 currentModelId）。
+    """
+    bin_path, extra_dir = resolve_transcode_cli()
+    if not bin_path:
+        raise RuntimeError("transcode CLI not found (looked in PATH, ~/.bun/bin, /usr/local/bin)")
+    child_env = os.environ.copy()
+    if extra_dir:
+        child_env["PATH"] = extra_dir + os.pathsep + child_env.get("PATH", "")
+    workdir = tempfile.mkdtemp(prefix="transonce-models-")
+    conn = _AcpConn(bin_path, workdir, child_env)
+    try:
+        conn.request(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}},
+                "cwd": workdir,
+            },
+            timeout_s=timeout_s,
+        )
+        try:
+            result = conn.request("agent/models", {}, timeout_s=timeout_s)
+            return {"availableModels": result.get("models") or [], "currentModelId": None}
+        except RuntimeError:
+            # 旧版 transcode 无 agent/models → 退回 session/new
+            new_result = conn.request(
+                "session/new", {"cwd": workdir, "mcpServers": []}, timeout_s=timeout_s,
+            )
+            return new_result.get("models") or {}
+    finally:
+        conn.close()
+
+
 def run_acp_text(
     user_prompt: str,
     model: str | None = None,
@@ -179,6 +271,7 @@ def run_acp_text(
 
     conn = _AcpConn(bin_path, workdir, child_env)
     pieces: list[str] = []
+    key = _cancel_key.get()
 
     def on_update(update: dict) -> None:
         if update.get("sessionUpdate") == "agent_message_chunk":
@@ -204,14 +297,23 @@ def run_acp_text(
         session_id = new_result.get("sessionId")
         if not session_id:
             raise RuntimeError("session/new returned no sessionId")
-        conn.request(
+        conn.session_id = session_id
+        if key:
+            with _active_lock:
+                _active_conns[key] = conn
+        prompt_result = conn.request(
             "session/prompt",
             {"sessionId": session_id, "prompt": [{"type": "text", "text": user_prompt}]},
             on_update=on_update,
             timeout_s=timeout_s,
         )
+        if (prompt_result or {}).get("stopReason") == "cancelled":
+            raise AgentCancelled("已停止生成")
         return "".join(pieces)
     except TimeoutError:
+        conn.close()
+        raise
+    except AgentCancelled:
         conn.close()
         raise
     except Exception as exc:
@@ -219,4 +321,8 @@ def run_acp_text(
         conn.close()
         raise RuntimeError(f"{exc}\n[transcode stderr] {tail}") from exc
     finally:
+        if key:
+            with _active_lock:
+                if _active_conns.get(key) is conn:
+                    _active_conns.pop(key, None)
         conn.close()

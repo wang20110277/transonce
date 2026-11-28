@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Bot, X, Send, Sparkles, Loader2, Plus, MessageSquare, Trash2, Minimize2,
-  Maximize2, Paperclip, ChevronDown, CheckCircle2,
+  Maximize2, Paperclip, ChevronDown, CheckCircle2, Square,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
@@ -299,9 +299,20 @@ export function GlobalAIChat() {
                       placeholder="描述目标，或输入“帮我跑一遍全流程”…"
                       className="flex-1 resize-none rounded-xl border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring max-h-28"
                     />
-                    <Button size="icon" className="h-9 w-9 rounded-xl shrink-0" disabled={loading || !input.trim()} onClick={() => send()}>
-                      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                    </Button>
+                    {loading && activeId ? (
+                      <Button
+                        size="icon"
+                        className="h-9 w-9 rounded-xl shrink-0"
+                        title="停止生成"
+                        onClick={() => { api.chat.cancel(tid, activeId).catch(() => {}); }}
+                      >
+                        <Square className="w-4 h-4" />
+                      </Button>
+                    ) : (
+                      <Button size="icon" className="h-9 w-9 rounded-xl shrink-0" disabled={loading || !input.trim()} onClick={() => send()}>
+                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                      </Button>
+                    )}
                   </div>
                   <p className="text-[9px] text-muted-foreground mt-1.5 text-center">Agent 不能读取环境明文密码；生产发布仍由人工授权。</p>
                 </div>

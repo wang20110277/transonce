@@ -95,6 +95,11 @@ def main() -> int:
     print("[设置校验]")
     original = platform_settings.get_auth_settings()
     try:
+        # 先清空 ldap 块再测负向校验：库里可能已有完整配置，patch 合并后总是“齐全”。
+        platform_settings.save_auth_settings({
+            "ldap": {"enabled": False, "host": "", "port": 389, "security": "plain",
+                     "bindDn": "", "clientSecret": "", "baseDn": "", "userFilter": ""}
+        })
         try:
             platform_settings.save_auth_settings({"ldap": {"enabled": True, "host": "ldap.example.com"}})
             check("缺必填项时拒绝开启", False, "未抛 ValueError")

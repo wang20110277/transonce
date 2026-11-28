@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import {
   FileText, Plus, Sparkles, Layers, Code2, TestTube2, Bot,
   CheckCircle2, Circle, Trash2, Pencil, Loader2, ListChecks, GitBranch,
-  AlertTriangle, Database, PanelTop, Workflow, RefreshCw, Search,
+  AlertTriangle, Database, PanelTop, Workflow, RefreshCw, Search, Square,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -168,6 +168,16 @@ export function Requirements() {
             </div>
 
             <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t">
+              {busy && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => { api.requirements.cancel(tid, selected.id).catch(() => {}); }}
+                >
+                  <Square className="w-4 h-4 mr-2" /> 停止
+                </Button>
+              )}
               <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act("design", async () => {
                 const r = await api.requirements.design(tid, selected.id);
                 return `已生成原型与架构${r.architecture?.components?.length ? `：${r.architecture.components.length} 个组件` : ""}`;

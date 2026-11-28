@@ -6,6 +6,7 @@ import { getToken } from "../services/api";
 export interface RuntimeModel {
   id: string;
   provider: string;
+  name?: string;
 }
 
 export interface RuntimeInfo {

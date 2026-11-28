@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from psycopg2.extras import Json
 
+import acp_agent
 import agents
 import alert_notify
 import db
@@ -140,11 +141,12 @@ def design_requirement(ctx: TenantContext, req: dict, force: bool = False) -> di
         return serializers.requirement(req)
     started = start_run(ctx, "design", f"{req['title']}\n{req.get('description') or ''}")
     try:
-        result = agents.design_requirement(
-            req["title"], req.get("description") or "",
-            req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
-            (started["agent"] or {}).get("model") or None,
-        )
+        with acp_agent.cancel_scope(f"design:{req['id']}"):
+            result = agents.design_requirement(
+                req["title"], req.get("description") or "",
+                req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
+                (started["agent"] or {}).get("model") or None,
+            )
         updated = db.execute_returning(
             """UPDATE requirements SET prototype=%s, architecture=%s, design_status='designed'
                WHERE id=%s RETURNING *""",
@@ -154,6 +156,9 @@ def design_requirement(ctx: TenantContext, req: dict, force: bool = False) -> di
         finish_run(started["run"], "succeeded", "已生成原型与架构设计")
         log_activity(ctx, "design.generated", {"requirementId": req["id"], "title": req["title"]}, "agent", (started["agent"] or {}).get("name"), tenant_id=ctx.tenant["id"])
         return serializers.requirement(updated)
+    except acp_agent.AgentCancelled:
+        finish_run(started["run"], "cancelled", "已停止生成")
+        raise HTTPException(409, "设计已停止")
     except Exception as e:
         finish_run(started["run"], "failed", "", str(e))
         raise HTTPException(500, f"设计 Agent 执行失败: {e}")
@@ -170,11 +175,12 @@ def breakdown_requirement(ctx: TenantContext, req: dict, force: bool = False) ->
 
     started = start_run(ctx, "breakdown", f"{req['title']}")
     try:
-        drafts = agents.breakdown_requirement(
-            req["title"], req.get("description") or "",
-            req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
-            (started["agent"] or {}).get("model") or None,
-        )
+        with acp_agent.cancel_scope(f"breakdown:{req['id']}"):
+            drafts = agents.breakdown_requirement(
+                req["title"], req.get("description") or "",
+                req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
+                (started["agent"] or {}).get("model") or None,
+            )
         if existing:
             db.execute("DELETE FROM dev_tasks WHERE requirement_id = %s", (req["id"],))
         agent_id = (started["agent"] or {}).get("id")
@@ -197,6 +203,9 @@ def breakdown_requirement(ctx: TenantContext, req: dict, force: bool = False) ->
         finish_run(started["run"], "succeeded", f"拆解出 {len(out)} 个任务")
         log_activity(ctx, "task.created", {"requirementId": req["id"], "count": len(out)}, "agent", (started["agent"] or {}).get("name"), tenant_id=ctx.tenant["id"])
         return out
+    except acp_agent.AgentCancelled:
+        finish_run(started["run"], "cancelled", "已停止生成")
+        raise HTTPException(409, "拆解已停止")
     except Exception as e:
         finish_run(started["run"], "failed", "", str(e))
         raise HTTPException(500, f"拆解 Agent 执行失败: {e}")
@@ -215,11 +224,12 @@ def code_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
     tasks = db.fetch_all("SELECT * FROM dev_tasks WHERE requirement_id = %s", (req["id"],))
     started = start_run(ctx, "code", f"{req['title']}（{len(tasks)} 个任务）")
     try:
-        result = agents.generate_code(
-            req["title"], req.get("description") or "", tasks,
-            (started["agent"] or {}).get("provider"),
-            (started["agent"] or {}).get("model") or None,
-        )
+        with acp_agent.cancel_scope(f"code:{req['id']}"):
+            result = agents.generate_code(
+                req["title"], req.get("description") or "", tasks,
+                (started["agent"] or {}).get("provider"),
+                (started["agent"] or {}).get("model") or None,
+            )
         version = result.get("version") or "v0.1.0"
         name = result.get("artifactName") or f"{req['title']}-bundle"
         content = json.dumps(result.get("files") or [], ensure_ascii=False)
@@ -245,6 +255,9 @@ def code_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
         finish_run(started["run"], "succeeded", result.get("summary") or "已生成代码制品")
         log_activity(ctx, "artifact.built", {"artifactId": str(row["id"]), "name": name, "version": version}, "agent", (started["agent"] or {}).get("name"), tenant_id=ctx.tenant["id"])
         return serializers.artifact(row)
+    except acp_agent.AgentCancelled:
+        finish_run(started["run"], "cancelled", "已停止生成")
+        raise HTTPException(409, "代码生成已停止")
     except Exception as e:
         finish_run(started["run"], "failed", "", str(e))
         raise HTTPException(500, f"编码 Agent 执行失败: {e}")
@@ -262,11 +275,12 @@ def test_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
             return serializers.test_run(existing)
     started = start_run(ctx, "test", req["title"])
     try:
-        cases = agents.generate_test_cases(
-            req["title"], req.get("description") or "",
-            req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
-            (started["agent"] or {}).get("model") or None,
-        )
+        with acp_agent.cancel_scope(f"test:{req['id']}"):
+            cases = agents.generate_test_cases(
+                req["title"], req.get("description") or "",
+                req.get("acceptance_criteria") or [], (started["agent"] or {}).get("provider"),
+                (started["agent"] or {}).get("model") or None,
+            )
         # No test executor is wired yet: cases are generated, not executed.
         run_cases = [
             {
@@ -290,6 +304,9 @@ def test_requirement(ctx: TenantContext, req: dict, force: bool = False) -> dict
         finish_run(started["run"], "succeeded", f"{len(run_cases)} 个用例已生成（模拟执行）")
         log_activity(ctx, "test.run", {"requirementId": req["id"], "passed": len(run_cases), "total": len(run_cases)}, "agent", (started["agent"] or {}).get("name"), tenant_id=ctx.tenant["id"])
         return serializers.test_run(row)
+    except acp_agent.AgentCancelled:
+        finish_run(started["run"], "cancelled", "已停止生成")
+        raise HTTPException(409, "测试用例生成已停止")
     except Exception as e:
         finish_run(started["run"], "failed", "", str(e))
         raise HTTPException(500, f"测试 Agent 执行失败: {e}")
@@ -917,10 +934,14 @@ def handle_chat(
                 "SELECT role, content FROM messages WHERE conversation_id=%s ORDER BY created_at DESC LIMIT 8",
                 (conversation["id"],),
             )
-            reply = agents.chat_reply(message, agent, list(reversed(history)))
+            with acp_agent.cancel_scope(f"chat:{conversation['id']}"):
+                reply = agents.chat_reply(message, agent, list(reversed(history)))
             result = {"kind": "chat"}
     except HTTPException:
         raise
+    except acp_agent.AgentCancelled:
+        reply = "已停止生成。"
+        result = {"kind": "cancelled"}
     except Exception as e:
         reply = f"执行失败：{e}。可以重试，或改用更具体的指令（例如指定需求标题）。"
         result = {"kind": "error", "error": str(e)}

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from psycopg2.extras import Json
 
+import acp_agent
 import agents
 import db
 import orchestration
@@ -379,3 +380,13 @@ def list_agent_runs(
             (tenant_id, user["id"], limit, offset),
         )
     return [serializers.agent_run(r) for r in rows]
+
+
+@router.post("/requirements/{requirement_id}/cancel")
+def cancel_generation(tenant_id: str, requirement_id: str, user: dict = Depends(get_current_user)):
+    """停止该需求任一阶段正在进行的 Agent 生成（设计/拆解/编码/测试）。"""
+    ctx = load_tenant_context(user, tenant_id, "development")
+    _req_or_404(tenant_id, requirement_id)
+    keys = acp_agent.cancel_matching(f":{requirement_id}")
+    log_activity(ctx, "agent.cancel", {"requirementId": requirement_id, "keys": keys}, "human")
+    return {"cancelled": keys}

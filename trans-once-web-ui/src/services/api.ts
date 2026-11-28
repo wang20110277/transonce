@@ -181,6 +181,8 @@ export const api = {
       post<Artifact>(`${T(tid)}/requirements/${rid}/code?force=${force}`),
     test: (tid: string, rid: string, force = false) =>
       post<TestRun>(`${T(tid)}/requirements/${rid}/test?force=${force}`),
+    cancel: (tid: string, rid: string) =>
+      post<{ cancelled: string[] }>(`${T(tid)}/requirements/${rid}/cancel`),
     autopilot: (tid: string, rid: string, body: { environmentId?: string; deploy?: boolean } = {}) =>
       post<{ requirementId: string; steps: { stage: string; ok: boolean; detail: string }[]; artifact: Artifact; testRun: TestRun; pipelineRun: PipelineRun; deployment: Deployment | null }>(
         `${T(tid)}/requirements/${rid}/autopilot`, body,
@@ -314,5 +316,7 @@ export const api = {
         `${T(tid)}/chat`, { content, context, conversationId, confirm },
       ),
     remove: (tid: string, cid: string) => del<{ ok: true }>(`${T(tid)}/conversations/${cid}`),
+    cancel: (tid: string, cid: string) =>
+      post<{ cancelled: boolean }>(`${T(tid)}/conversations/${cid}/cancel`),
   },
 };

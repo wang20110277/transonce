@@ -244,17 +244,20 @@ export function Select({
   children,
   className = "",
   id,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   children: ReactNode;
   className?: string;
   id?: string;
+  disabled?: boolean;
 }) {
   return (
     <select
       id={id}
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       className={`h-9 rounded-md border bg-background px-2 text-sm outline-none focus:ring-1 focus:ring-ring ${className}`}
     >

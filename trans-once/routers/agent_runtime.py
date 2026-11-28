@@ -64,6 +64,29 @@ def _opencode_models() -> tuple[list[dict], str | None]:
     return models, None
 
 
+def _transcode_models() -> tuple[list[dict], str | None]:
+    """transcode 模型经 ACP session/new 实时枚举（availableModels + 当前默认）。"""
+    try:
+        import acp_agent
+
+        models = acp_agent.list_models()
+    except Exception as e:  # 未安装 / 启动失败 / 超时
+        return [], f"transcode 模型枚举失败：{str(e)[:160]}"
+    available = [
+        {"id": m.get("modelId") or m.get("id"), "name": m.get("name")}
+        for m in models.get("availableModels") or []
+        if m.get("modelId") or m.get("id")
+    ]
+    if not available:
+        return [], "transcode 未返回可用模型（检查 ~/.transcode.json / provider 配置）"
+    current = models.get("currentModelId") or ""
+    note = "模型列表来自本机 transcode（ACP 实时枚举）"
+    if current:
+        note += f"；当前默认 {current}"
+    note += "，留空即用默认。"
+    return available, note
+
+
 def _claude_models() -> tuple[list[dict], str]:
     mapping = {
         alias: os.getenv(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL_NAME")
@@ -93,6 +116,7 @@ def agent_runtime() -> dict:
         _opencode_models() if _installed("opencode") else ([], "本机未安装 opencode")
     )
     cl_models, cl_note = _claude_models()
+    tc_models, tc_error = _transcode_models() if _acp_installed() else ([], "本机未安装 transcode")
     payload = {
         "providers": {
             "auto": {
@@ -104,15 +128,9 @@ def agent_runtime() -> dict:
             "transcode": {
                 "installed": _acp_installed(),
                 "supported": True,
-                "models": [
-                    {"id": "opus", "name": "Claude Opus"},
-                    {"id": "gpt", "name": "GPT-4o"},
-                    {"id": "deepseek", "name": "DeepSeek"},
-                    {"id": "glm", "name": "GLM"},
-                    {"id": "minimax", "name": "MiniMax"},
-                    {"id": "kimi", "name": "Kimi"},
-                ],
-                "note": "transcode（ACP，默认）：模型经 ~/.transcode.json / TRANSCODE_MODEL 配置。",
+                "models": tc_models,
+                **({"error": tc_error} if tc_error else {}),
+                "note": tc_error if tc_error else "模型列表来自本机 transcode（ACP）。",
             },
             "claude": {
                 "installed": _installed("claude"),
