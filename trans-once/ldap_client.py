@@ -69,8 +69,14 @@ def authenticate(cfg: dict, username: str, password: str) -> dict:
             server, user=(cfg.get("bindDn") or "").strip(),
             password=cfg.get("clientSecret") or "", read_only=True,
         )
-        if not conn.bind():
-            raise LdapError("LDAP 服务账号 Bind 失败，请检查平台设置", status=502)
+        try:
+            if not conn.bind():
+                raise LdapError("LDAP 服务账号 Bind 失败，请联系管理员检查平台设置", status=502)
+        except LdapError:
+            raise
+        except Exception as e:
+            # 连不上 / 超时 / 协议错误等，说清是目录服务侧的问题
+            raise LdapError(f"无法连接目录服务：{str(e)[:120]}", status=502)
         if security == "starttls" and not conn.start_tls():
             raise LdapError("LDAP StartTLS 协商失败", status=502)
         search_filter = build_search_filter(
@@ -94,10 +100,17 @@ def authenticate(cfg: dict, username: str, password: str) -> dict:
         email = first(cfg.get("mailAttr") or "mail")
         if not email:
             raise LdapError("该域账号未配置邮箱（mail 属性为空），请联系管理员补全", status=502)
-        # 以用户自己的 DN 复 Bind：Bind 成功即密码正确。
-        with Connection(server, user=entry.entry_dn, password=password) as user_conn:
-            if not user_conn.bind():
-                raise LdapError("域账号用户名或密码错误")
+        # 以用户自己的 DN 复 Bind：Bind 成功即密码正确。此阶段服务号已 Bind、
+        # 用户 DN 已找到，任何失败（返回 False 或抛异常）都按凭证问题处理，
+        # 不能误报成“服务不可用”。
+        try:
+            user_conn = Connection(server, user=entry.entry_dn, password=password)
+            ok = user_conn.bind()
+            user_conn.unbind()
+        except Exception:
+            ok = False
+        if not ok:
+            raise LdapError("域账号用户名或密码错误")
         return {
             "username": username,
             "email": email.lower(),
