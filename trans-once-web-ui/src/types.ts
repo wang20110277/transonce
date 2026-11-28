@@ -19,6 +19,7 @@ export type AuthConfig = {
   oidcEnabled: boolean;
   oidcDisplayName: string;
   ldapEnabled: boolean;
+  ldapDisplayName: string;
 };
 
 // 超级管理员的登录设置（GET/PUT /api/auth/settings）；secret 只回掩码。
@@ -52,12 +53,24 @@ export type AuthSettings = {
     usernameAttr: string;
     mailAttr: string;
     displayNameAttr: string;
+    displayName: string;
     hasClientSecret: boolean;
     clientSecretMasked?: string | null;
   };
 };
 
 export type Permission = { id: string; label: string; group: string };
+
+// 平台用户目录（超管视角，转让超管身份用）
+export type PlatformUser = {
+  id: string;
+  email: string;
+  name: string;
+  isSuperAdmin: boolean;
+  status?: string | null;
+  authProvider?: string;
+  createdAt?: string | null;
+};
 
 export type Role = {
   id: string;

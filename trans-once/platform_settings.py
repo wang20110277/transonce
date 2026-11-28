@@ -48,6 +48,7 @@ DEFAULT_LDAP = {
     "usernameAttr": "sAMAccountName",
     "mailAttr": "mail",
     "displayNameAttr": "displayName",
+    "displayName": "",  # 登录入口文案；空 = 「企业账号登录」
 }
 
 PROVIDERS = {"microsoft": DEFAULT_MICROSOFT, "oidc": DEFAULT_OIDC, "ldap": DEFAULT_LDAP}
@@ -168,6 +169,7 @@ def public_auth_config(settings: dict) -> dict:
         "oidcEnabled": oidc_ready(settings),
         "oidcDisplayName": (settings.get("oidc") or {}).get("displayName") or "",
         "ldapEnabled": ldap_ready(settings),
+        "ldapDisplayName": (settings.get("ldap") or {}).get("displayName") or "",
     }
 
 

@@ -3,7 +3,7 @@ import re
 import time
 import urllib.parse
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 import db
 import ldap_client
@@ -12,7 +12,7 @@ import oidc_client
 import platform_settings
 import serializers
 from config import DEFAULT_ROLE
-from deps import get_current_user
+from deps import get_current_user, log_activity
 from security import (
     create_signed_value,
     create_token,
@@ -135,14 +135,8 @@ def login(request: Request, body: dict = Body(...)):
     key = _rate_limit_key(request, email)
     _assert_login_allowed(key)
     if not password_login_enabled:
-        # Safety valve: the super admin keeps password access even when the
-        # switch is off, so a mis-click can never lock the platform out.
-        admin = db.fetch_one(
-            "SELECT * FROM users WHERE lower(email)=lower(%s) AND is_super_admin",
-            (email,),
-        )
-        if not admin:
-            raise HTTPException(403, "平台已关闭密码登录，请使用微软账号登录")
+        # 关闭即全员禁用（超级管理员经由 AD/OIDC 等方式登录，不再保留密码后门）。
+        raise HTTPException(403, "平台已关闭密码登录，请使用企业账号或三方登录")
     user = db.fetch_one("SELECT * FROM users WHERE lower(email)=lower(%s)", (email,))
     if not user or not verify_password(body.get("password") or "", user["password_hash"]):
         _login_failures.setdefault(key, []).append(time.monotonic())
@@ -248,6 +242,67 @@ def put_auth_settings(body: dict = Body(...), user: dict = Depends(get_current_u
     except ValueError as e:
         raise HTTPException(400, str(e))
     return platform_settings.admin_auth_settings(settings)
+
+
+@router.get("/users")
+def list_users(q: str = Query(default=""), user: dict = Depends(get_current_user)):
+    """平台用户目录（仅超级管理员）——转让超管身份时的选择数据源。"""
+    if not user.get("is_super_admin"):
+        raise HTTPException(403, "只有超级管理员可以查看用户目录")
+    term = q.strip()
+    if term:
+        rows = db.fetch_all(
+            """SELECT * FROM users
+               WHERE email ILIKE %s OR name ILIKE %s
+               ORDER BY is_super_admin DESC, created_at DESC LIMIT 200""",
+            (f"%{term}%", f"%{term}%"),
+        )
+    else:
+        rows = db.fetch_all(
+            "SELECT * FROM users ORDER BY is_super_admin DESC, created_at DESC LIMIT 200"
+        )
+    return {"items": [serializers.user(r) for r in rows]}
+
+
+@router.put("/transfer-super-admin")
+def transfer_super_admin(body: dict = Body(...), user: dict = Depends(get_current_user)):
+    """把超级管理员身份转让给另一用户；转让成功后原超管立即降为普通用户。
+
+    平台恒只有一个超管：单条语句内完成「提升目标 + 其余全部降级」，
+    目标提升失败时不会降级任何人（避免出现零超管）。
+    """
+    if not user.get("is_super_admin"):
+        raise HTTPException(403, "只有超级管理员可以转让超级管理员身份")
+    target_id = str(body.get("userId") or "").strip()
+    if not target_id:
+        raise HTTPException(400, "请选择要接收超级管理员身份的用户")
+    if target_id == str(user["id"]):
+        raise HTTPException(400, "超级管理员已经是你本人，无需转让")
+    target = db.fetch_one("SELECT * FROM users WHERE id=%s", (target_id,))
+    if not target:
+        raise HTTPException(404, "目标用户不存在")
+    if target.get("status") == "disabled":
+        raise HTTPException(400, "目标用户已被禁用，不能授予超级管理员")
+    db.execute(
+        """WITH promoted AS (
+               UPDATE users SET is_super_admin=TRUE
+               WHERE id=%s AND status<>'disabled' RETURNING id
+           )
+           UPDATE users SET is_super_admin=FALSE
+           WHERE (SELECT count(*) FROM promoted)=1
+             AND is_super_admin AND id NOT IN (SELECT id FROM promoted)""",
+        (target_id,),
+    )
+    new_admin = db.fetch_one("SELECT * FROM users WHERE is_super_admin")
+    if not new_admin or str(new_admin["id"]) != target_id:
+        raise HTTPException(500, "转让未生效，请重试")
+    log_activity(
+        None, "auth.super_admin_transferred",
+        {"fromUserId": str(user["id"]), "fromEmail": user["email"],
+         "toUserId": target_id, "toEmail": target["email"]},
+        actor_id=str(user["id"]),
+    )
+    return {"superAdmin": serializers.user(new_admin)}
 
 
 # --- redirect-based identity providers (Microsoft + generic OIDC) --------

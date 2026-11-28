@@ -3,9 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, ShieldAlert } from "lucide-react";
-import type { AuthSettings } from "../types";
+import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
+import type { AuthSettings, PlatformUser } from "../types";
 import { api } from "../services/api";
+import { refreshSession, useSession } from "../lib/session";
 import { Modal, SwitchRow } from "./common";
 
 // 平台登录设置（仅超级管理员）：密码登录 / 注册开关，微软与通用 OIDC 客户端配置。
@@ -31,12 +32,44 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // 超管转让
+  const me = useSession((s) => s.user);
+  const [users, setUsers] = useState<PlatformUser[]>([]);
+  const [targetId, setTargetId] = useState("");
+  const [transferring, setTransferring] = useState(false);
 
   useEffect(() => {
     api.auth.authSettings().then(setSettings).catch((e) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   }, []);
+
+  useEffect(() => {
+    api.auth.platformUsers()
+      .then((r) => setUsers(r.items))
+      .catch(() => setUsers([]));
+  }, []);
+
+  const currentAdmin = users.find((u) => u.isSuperAdmin);
+  const candidates = users.filter((u) => !u.isSuperAdmin && u.status !== "disabled");
+
+  const transfer = async () => {
+    const target = candidates.find((u) => u.id === targetId);
+    if (!target) return;
+    if (!confirm(`确定把超级管理员转让给 ${target.name}（${target.email}）？\n\n转让后你将立即降为普通用户，并失去本设置页的访问权。`)) return;
+    setTransferring(true);
+    setError(null);
+    try {
+      await api.auth.transferSuperAdmin(targetId);
+      await refreshSession();
+      alert(`超级管理员已转让给 ${target.name}（${target.email}）。`);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTransferring(false);
+    }
+  };
 
   const patch = (p: Partial<AuthSettings>) =>
     setSettings((s) => (s ? { ...s, ...p } : s));
@@ -85,6 +118,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
           usernameAttr: settings.ldap.usernameAttr.trim() || "sAMAccountName",
           mailAttr: settings.ldap.mailAttr.trim() || "mail",
           displayNameAttr: settings.ldap.displayNameAttr.trim() || "displayName",
+          displayName: settings.ldap.displayName.trim(),
         },
       };
       if (secret.trim() !== "") body.microsoft.clientSecret = secret.trim();
@@ -129,7 +163,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
     );
 
   return (
-    <Modal title="平台登录设置" onClose={onClose}>
+    <Modal title="平台登录设置" onClose={onClose} wide>
       {!settings ? (
         <div className="flex items-center justify-center py-10">
           {error ? <p className="text-sm text-destructive">{error}</p> : <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
@@ -140,7 +174,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
           {toast && <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">{toast}</p>}
 
           <Tabs defaultValue="basic">
-            <TabsList className="w-full">
+            <TabsList className="w-full grid grid-cols-2 sm:grid-cols-4 h-auto">
               <TabsTrigger value="basic">登录方式</TabsTrigger>
               <TabsTrigger value="ldap"><StatusDot on={settings.ldap.enabled && ldapConfigured} />企业账号（LDAP）</TabsTrigger>
               <TabsTrigger value="oidc"><StatusDot on={settings.oidc.enabled && oidcConfigured} />OIDC 登录</TabsTrigger>
@@ -150,7 +184,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
             <TabsContent value="basic" className="pt-3 space-y-2.5">
               <SwitchRow
                 title="密码登录"
-                description="关闭后仅超级管理员仍可用邮箱密码登录（防止误锁），其他用户只能走三方登录。"
+                description="关闭后所有人（含超级管理员）都不再显示密码表单，密码登录接口同时拒绝；超级管理员经企业账号或三方登录进入。"
                 checked={settings.passwordLoginEnabled}
                 onChange={(v) => patch({ passwordLoginEnabled: v })}
               />
@@ -160,6 +194,42 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
                 checked={settings.registrationEnabled}
                 onChange={(v) => patch({ registrationEnabled: v })}
               />
+              <div className="rounded-lg border bg-background/50 px-3.5 py-3 space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  超级管理员：{currentAdmin ? `${currentAdmin.name}（${currentAdmin.email}）` : me ? `${me.name}（${me.email}）` : "—"}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  平台始终只有一个超级管理员。把身份转让给其他用户后，你将立即降为普通用户并失去本设置页的访问权；对方下次登录即拥有全部平台权限。
+                </p>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">转让给</label>
+                  <select
+                    value={targetId}
+                    onChange={(e) => setTargetId(e.target.value)}
+                    className="w-full h-10 rounded-md border bg-background/50 px-2 text-sm"
+                  >
+                    <option value="">选择用户…</option>
+                    {candidates.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name}（{u.email}）{u.authProvider === "ldap" ? " · 域账号" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {candidates.length === 0 && (
+                    <p className="text-xs text-muted-foreground">暂无可转让的用户（需为未禁用的普通用户）。</p>
+                  )}
+                </div>
+                <Button
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  disabled={!targetId || transferring}
+                  onClick={transfer}
+                >
+                  {transferring ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                  转让并退出设置
+                </Button>
+              </div>
             </TabsContent>
 
             <TabsContent value="microsoft" className="pt-3 space-y-2.5">
@@ -340,6 +410,14 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
                     <option value="ldaps">LDAPS（636，SSL）</option>
                   </select>
                   <p className="text-xs text-muted-foreground">域账号密码会经目录服务校验，建议使用 StartTLS 或 LDAPS。</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">登录入口文案</label>
+                  <Input
+                    value={settings.ldap.displayName}
+                    onChange={(e) => patchLdap({ displayName: e.target.value })}
+                    placeholder="如：TRANS 域账号（默认「企业账号登录」）"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Bind DN（服务账号）</label>

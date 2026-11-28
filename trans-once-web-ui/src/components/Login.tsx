@@ -24,6 +24,7 @@ const FALLBACK_CONFIG: AuthConfig = {
   oidcEnabled: false,
   oidcDisplayName: "",
   ldapEnabled: false,
+  ldapDisplayName: "",
 };
 
 // 桌面客户端（Electron preload 注入）提供的 OAuth 桥：app:// 页面无法注册
@@ -55,8 +56,6 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<AuthConfig>(FALLBACK_CONFIG);
   const [msPending, setMsPending] = useState(false);
-  // 密码登录被关闭时的管理员逃生口：API 侧本就只放行超级管理员，这里给入口。
-  const [adminLogin, setAdminLogin] = useState(false);
   const [history, setHistory] = useState<LoginHistoryEntry[]>([]);
 
   useEffect(() => {
@@ -88,21 +87,27 @@ export function Login() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const showPassword = config.passwordLoginEnabled || adminLogin;
+  const showPassword = config.passwordLoginEnabled;
   const showRegister = config.passwordLoginEnabled && config.registrationEnabled;
   const showMicrosoft = config.microsoftEnabled;
   const oidcLabel = config.oidcDisplayName?.trim() || "使用单点登录（OIDC）";
   const showOidc = config.oidcEnabled;
   const showLdap = config.ldapEnabled;
+  const ldapLabel = config.ldapDisplayName?.trim() || "企业账号登录";
   const anySso = showMicrosoft || showOidc || showLdap;
+  // 企业账号是唯一登录方式时直接呈现域账号表单，不再绕「企业账号登录」按钮，
+  // 也不显示没有意义的「返回其它登录方式」。
+  const ldapOnly = showLdap && !showPassword && !showOidc && !showMicrosoft;
+  const formMode = ldapOnly && mode === "login" ? "ldap" : mode;
+  const hasOtherWays = showPassword || showOidc || showMicrosoft;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      if (mode === "login") await login(email, password);
-      else if (mode === "ldap") await loginWithLdap(ldapUser, password);
+      if (formMode === "ldap") await loginWithLdap(ldapUser, password);
+      else if (mode === "login") await login(email, password);
       else await register(email, name, password);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -180,7 +185,7 @@ export function Login() {
             </div>
           ) : (
             <>
-              {mode !== "ldap" && showPassword && showRegister && (
+              {formMode !== "ldap" && showPassword && showRegister && (
                 <div className="flex gap-1 p-1 bg-muted rounded-lg mb-6">
                   {(["login", "register"] as const).map((m) => (
                     <button
@@ -195,7 +200,7 @@ export function Login() {
                 </div>
               )}
 
-              {showLdap && (
+              {showLdap && !ldapOnly && (
                 <Button
                   type="button"
                   variant="outline"
@@ -203,7 +208,7 @@ export function Login() {
                   onClick={() => { setMode("ldap"); setError(null); }}
                 >
                   <Building2 className="w-4.5 h-4.5 mr-2" />
-                  企业账号登录
+                  {ldapLabel}
                 </Button>
               )}
               {showOidc && (
@@ -236,8 +241,9 @@ export function Login() {
                 </div>
               )}
 
-              {mode === "ldap" ? (
+              {formMode === "ldap" ? (
                 <form onSubmit={submit} className="space-y-4">
+                  <p className="text-center text-sm font-medium text-foreground">{ldapLabel}</p>
                   <div className="space-y-2">
                     <label className="text-sm font-medium ml-1">域账号用户名</label>
                     <div className="relative">
@@ -259,13 +265,15 @@ export function Login() {
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "登 录"}
                   </Button>
                   <div className="pt-1 text-center">
-                    <button
-                      type="button"
-                      className="text-xs text-primary hover:underline"
-                      onClick={() => { setMode("login"); setPassword(""); setError(null); }}
-                    >
-                      ← 返回其它登录方式
-                    </button>
+                    {hasOtherWays && (
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => { setMode("login"); setPassword(""); setError(null); }}
+                      >
+                        ← 返回其它登录方式
+                      </button>
+                    )}
                   </div>
                 </form>
               ) : showPassword ? (
@@ -306,13 +314,6 @@ export function Login() {
                   {!anySso && (
                     <p className="text-xs text-muted-foreground text-center">平台已关闭密码登录，请联系管理员开启一种登录方式。</p>
                   )}
-                  <button
-                    type="button"
-                    className="w-full text-xs text-primary hover:underline"
-                    onClick={() => { setAdminLogin(true); setError(null); }}
-                  >
-                    管理员密码登录 →
-                  </button>
                 </div>
               )}
 

@@ -375,13 +375,6 @@ def update_member(tenant_id: str, member_user_id: str, body: dict = Body(...), u
     new_admin = bool(body.get("isTenantAdmin", row["is_tenant_admin"]))
     if new_admin != bool(row.get("is_tenant_admin")) and not ctx.is_tenant_admin:
         raise HTTPException(403, "只有租户管理员可以变更管理员身份")
-    if row.get("is_tenant_admin") and not new_admin:
-        admins = db.fetch_one(
-            "SELECT count(*) AS c FROM tenant_members WHERE tenant_id=%s AND status='active' AND is_tenant_admin=TRUE",
-            (tenant_id,),
-        )["c"]
-        if admins <= 1:
-            raise HTTPException(400, "至少保留一名租户管理员")
     role_id = body.get("roleId", row.get("role_id"))
     role = None
     if role_id:
@@ -391,6 +384,20 @@ def update_member(tenant_id: str, member_user_id: str, body: dict = Body(...), u
         if not role:
             raise HTTPException(400, "角色不存在或不属于当前租户")
         _guard_admin_role(ctx, role)
+    # 角色与管理员标志联动：未显式传 isTenantAdmin 时，选了系统「租户管理员」
+    # 角色即视为租户管理员，换成其它角色则自动摘除（仍受“至少保留一名”保护），
+    # 避免“设了管理员角色却不是管理员”的错位。
+    if body.get("isTenantAdmin") is None:
+        new_admin = bool(role and role.get("is_system") and role.get("name") == "租户管理员")
+        if new_admin != bool(row.get("is_tenant_admin")) and not ctx.is_tenant_admin:
+            raise HTTPException(403, "只有租户管理员可以变更管理员身份")
+    if row.get("is_tenant_admin") and not new_admin:
+        admins = db.fetch_one(
+            "SELECT count(*) AS c FROM tenant_members WHERE tenant_id=%s AND status='active' AND is_tenant_admin=TRUE",
+            (tenant_id,),
+        )["c"]
+        if admins <= 1:
+            raise HTTPException(400, "至少保留一名租户管理员")
     new_status = body.get("status", row["status"])
     if new_status not in ("active", "invited", "disabled"):
         raise HTTPException(400, "无效的成员状态")

@@ -82,6 +82,10 @@ export const api = {
     updateMe: (body: Partial<{ name: string; email: string; avatar: string; password: string; currentPassword: string }>) =>
       patch<AuthUser>("/auth/me", body),
     config: () => get<AuthConfig>("/auth/config"),
+    platformUsers: (q = "") =>
+      get<{ items: import("../types").PlatformUser[] }>(`/auth/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+    transferSuperAdmin: (userId: string) =>
+      put<{ superAdmin: import("../types").PlatformUser }>("/auth/transfer-super-admin", { userId }),
     authSettings: () => get<AuthSettings>("/auth/settings"),
     // clientSecret 省略 = 保留已存值；空串 = 清除；非空 = 替换。
     updateAuthSettings: (body: Partial<{
