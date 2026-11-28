@@ -18,6 +18,7 @@ export type AuthConfig = {
   microsoftEnabled: boolean;
   oidcEnabled: boolean;
   oidcDisplayName: string;
+  ldapEnabled: boolean;
 };
 
 // 超级管理员的登录设置（GET/PUT /api/auth/settings）；secret 只回掩码。
@@ -39,6 +40,20 @@ export type AuthSettings = {
     clientSecretMasked?: string | null;
     displayName: string;
     scope: string;
+  };
+  ldap: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    security: "plain" | "starttls" | "ldaps";
+    bindDn: string;
+    baseDn: string;
+    userFilter: string;
+    usernameAttr: string;
+    mailAttr: string;
+    displayNameAttr: string;
+    hasClientSecret: boolean;
+    clientSecretMasked?: string | null;
   };
 };
 

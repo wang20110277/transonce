@@ -7,8 +7,10 @@ const MAX = 5;
 export type LoginHistoryEntry = {
   email: string;
   name: string;
-  provider: "password" | "microsoft" | "oidc";
+  provider: "password" | "microsoft" | "oidc" | "ldap";
   at: number;
+  // LDAP 登录的历史记录回填用的域账号用户名（其它登录方式为空）。
+  username?: string;
 };
 
 export function listLoginHistory(): LoginHistoryEntry[] {

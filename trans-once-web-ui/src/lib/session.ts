@@ -122,6 +122,16 @@ export async function loginWithOidc(code: string, state: string): Promise<void> 
   await refreshSession();
 }
 
+// 企业账号（LDAP/AD）登录：域账号密码直连校验，authProvider=ldap。
+// 历史记录多存一份域账号用户名，便于下次回填。
+export async function loginWithLdap(username: string, password: string): Promise<void> {
+  const res = await api.auth.ldapLogin(username, password);
+  setToken(res.token);
+  addLoginHistory({ email: res.user.email, name: res.user.name, provider: "ldap", username });
+  set({ user: res.user, status: "loading" });
+  await refreshSession();
+}
+
 export function selectTenant(tenant: TenantSummary) {
   localStorage.setItem(TENANT_KEY, tenant.tenant.id);
   set({ currentTenant: tenant });

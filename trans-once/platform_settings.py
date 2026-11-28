@@ -34,7 +34,23 @@ DEFAULT_OIDC = {
     "scope": "openid profile email",
 }
 
-PROVIDERS = {"microsoft": DEFAULT_MICROSOFT, "oidc": DEFAULT_OIDC}
+DEFAULT_LDAP = {
+    "enabled": False,
+    "host": "",
+    "port": 389,
+    # plain | starttls | ldaps —— 密码经复 Bind 校验，非 plain 更安全
+    "security": "plain",
+    "bindDn": "",
+    "clientSecret": "",  # Bind 密码（写入时加密为 clientSecretEnc）
+    "baseDn": "",
+    # 叠加在用户名条件外的范围限制，如 (memberOf=cn=公司全员,ou=...,dc=...)
+    "userFilter": "",
+    "usernameAttr": "sAMAccountName",
+    "mailAttr": "mail",
+    "displayNameAttr": "displayName",
+}
+
+PROVIDERS = {"microsoft": DEFAULT_MICROSOFT, "oidc": DEFAULT_OIDC, "ldap": DEFAULT_LDAP}
 
 DEFAULT_AUTH_SETTINGS = {
     "passwordLoginEnabled": True,
@@ -48,7 +64,10 @@ DEFAULT_AUTH_SETTINGS = {
 _PROVIDER_REQUIRED_FIELDS = {
     "microsoft": ("clientId", "clientSecret"),
     "oidc": ("issuerUrl", "clientId", "clientSecret"),
+    "ldap": ("host", "bindDn", "clientSecret", "baseDn"),
 }
+
+_PROVIDER_LABELS = {"microsoft": "微软登录", "oidc": "OIDC 登录", "ldap": "LDAP 登录"}
 
 
 def _decrypt(row: dict | None) -> dict:
@@ -101,7 +120,7 @@ def save_auth_settings(patch: dict[str, Any]) -> dict:
                 f for f in _PROVIDER_REQUIRED_FIELDS[key] if not block.get(f)
             ]
             if missing:
-                label = "微软登录" if key == "microsoft" else "OIDC 登录"
+                label = _PROVIDER_LABELS.get(key, key)
                 raise ValueError(f"开启{label}前，需要先配置 {' / '.join(missing)}")
         next_settings[key] = block
 
@@ -136,6 +155,10 @@ def oidc_ready(settings: dict) -> bool:
     return _provider_ready(settings, "oidc")
 
 
+def ldap_ready(settings: dict) -> bool:
+    return _provider_ready(settings, "ldap")
+
+
 def public_auth_config(settings: dict) -> dict:
     """The subset the (unauthenticated) login page needs to render itself."""
     return {
@@ -144,6 +167,7 @@ def public_auth_config(settings: dict) -> dict:
         "microsoftEnabled": microsoft_ready(settings),
         "oidcEnabled": oidc_ready(settings),
         "oidcDisplayName": (settings.get("oidc") or {}).get("displayName") or "",
+        "ldapEnabled": ldap_ready(settings),
     }
 
 
@@ -162,4 +186,5 @@ def admin_auth_settings(settings: dict) -> dict:
         "registrationEnabled": bool(settings.get("registrationEnabled")),
         "microsoft": masked_block("microsoft"),
         "oidc": masked_block("oidc"),
+        "ldap": masked_block("ldap"),
     }

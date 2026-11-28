@@ -28,6 +28,7 @@ npm run build       # vite build → dist/
 # 测试（冒烟需后端已启动并完成种子）
 python3 trans-once/tests/smoke.py          # 端到端冒烟，150 余项检查，以输出为准（SMOKE_ONLY=alerts 只跑告警一节）
 python3 trans-once/tests/microsoft_flow.py # 微软登录回调离线测试
+python3 trans-once/tests/ldap_flow.py      # LDAP 登录离线测试（过滤器转义 / UAC / 设置校验 / 建号限流）
 python3 trans-once/tests/notifiers_flow.py # 告警消息离线测试（签名 / 消息体 / 掩码 / 发送）
 
 # 桌面客户端（可选）

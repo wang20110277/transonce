@@ -76,6 +76,8 @@ export const api = {
       post<{ token: string; user: AuthUser }>("/auth/login", { email, password }),
     register: (email: string, name: string, password: string) =>
       post<{ token: string; user: AuthUser }>("/auth/register", { email, name, password }),
+    ldapLogin: (username: string, password: string) =>
+      post<{ token: string; user: AuthUser }>("/auth/ldap/login", { username, password }),
     me: () => get<{ user: AuthUser; memberships: TenantSummary[] }>("/auth/me"),
     updateMe: (body: Partial<{ name: string; email: string; avatar: string; password: string; currentPassword: string }>) =>
       patch<AuthUser>("/auth/me", body),
@@ -87,6 +89,7 @@ export const api = {
       registrationEnabled: boolean;
       microsoft: Partial<AuthSettings["microsoft"]> & { clientSecret?: string };
       oidc: Partial<AuthSettings["oidc"]> & { clientSecret?: string };
+      ldap: Partial<AuthSettings["ldap"]> & { clientSecret?: string };
     }>) => put<AuthSettings>("/auth/settings", body),
     microsoftStart: (redirectUri: string) =>
       post<{ url: string }>("/auth/microsoft/start", { redirectUri }),

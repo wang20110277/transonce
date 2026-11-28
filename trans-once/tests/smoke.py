@@ -864,6 +864,15 @@ def main() -> int:
     check("health endpoint ok", health.get("ok") is True)
     check("agent provider reported", bool(health.get("provider")))
 
+    _, auth_cfg = call("GET", "/api/auth/config")
+    check("auth config exposes ldap switch", "ldapEnabled" in auth_cfg)
+    if not auth_cfg.get("ldapEnabled"):
+        status, _ = call(
+            "POST", "/api/auth/ldap/login",
+            {"username": "smoke", "password": "whatever"}, expect=None,
+        )
+        check("ldap login rejected when disabled", status == 403)
+
     print("\n[bootstrap fixtures]")
     admin = login(ADMIN_EMAIL, ADMIN_PASSWORD)
     check("admin login", bool(admin.get("token")))

@@ -27,6 +27,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
   const [settings, setSettings] = useState<AuthSettings | null>(null);
   const [secret, setSecret] = useState("");
   const [oidcSecret, setOidcSecret] = useState("");
+  const [ldapSecret, setLdapSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -43,6 +44,8 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
     setSettings((s) => (s ? { ...s, microsoft: { ...s.microsoft, ...p } } : s));
   const patchOidc = (p: Partial<AuthSettings["oidc"]>) =>
     setSettings((s) => (s ? { ...s, oidc: { ...s.oidc, ...p } } : s));
+  const patchLdap = (p: Partial<AuthSettings["ldap"]>) =>
+    setSettings((s) => (s ? { ...s, ldap: { ...s.ldap, ...p } } : s));
 
   const save = async () => {
     if (!settings) return;
@@ -55,6 +58,7 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
         registrationEnabled: boolean;
         microsoft: Record<string, unknown>;
         oidc: Record<string, unknown>;
+        ldap: Record<string, unknown>;
       } = {
         passwordLoginEnabled: settings.passwordLoginEnabled,
         registrationEnabled: settings.registrationEnabled,
@@ -70,13 +74,27 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
           displayName: settings.oidc.displayName.trim(),
           scope: settings.oidc.scope.trim() || "openid profile email",
         },
+        ldap: {
+          enabled: settings.ldap.enabled,
+          host: settings.ldap.host.trim(),
+          port: Number(settings.ldap.port) || 389,
+          security: settings.ldap.security,
+          bindDn: settings.ldap.bindDn.trim(),
+          baseDn: settings.ldap.baseDn.trim(),
+          userFilter: settings.ldap.userFilter.trim(),
+          usernameAttr: settings.ldap.usernameAttr.trim() || "sAMAccountName",
+          mailAttr: settings.ldap.mailAttr.trim() || "mail",
+          displayNameAttr: settings.ldap.displayNameAttr.trim() || "displayName",
+        },
       };
       if (secret.trim() !== "") body.microsoft.clientSecret = secret.trim();
       if (oidcSecret.trim() !== "") body.oidc.clientSecret = oidcSecret.trim();
+      if (ldapSecret.trim() !== "") body.ldap.clientSecret = ldapSecret.trim();
       const next = await api.auth.updateAuthSettings(body);
       setSettings(next);
       setSecret("");
       setOidcSecret("");
+      setLdapSecret("");
       setToast("登录设置已保存，立即生效");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -91,6 +109,9 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
   const oidcConfigured =
     !!settings?.oidc.issuerUrl && !!settings?.oidc.clientId && settings?.oidc.hasClientSecret;
   const oidcToggleLocked = !oidcConfigured && !oidcSecret.trim();
+  const ldapConfigured =
+    !!settings?.ldap.host && !!settings?.ldap.bindDn && !!settings?.ldap.baseDn && settings?.ldap.hasClientSecret;
+  const ldapToggleLocked = !ldapConfigured && !ldapSecret.trim();
   // 桌面端 app:// 不是可注册的回调地址，提示改用浏览器地址。
   const webOrigin =
     window.location.protocol === "http:" || window.location.protocol === "https:"
@@ -121,8 +142,9 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
           <Tabs defaultValue="basic">
             <TabsList className="w-full">
               <TabsTrigger value="basic">登录方式</TabsTrigger>
-              <TabsTrigger value="microsoft"><StatusDot on={settings.microsoft.enabled && msConfigured} />微软登录</TabsTrigger>
+              <TabsTrigger value="ldap"><StatusDot on={settings.ldap.enabled && ldapConfigured} />企业账号（LDAP）</TabsTrigger>
               <TabsTrigger value="oidc"><StatusDot on={settings.oidc.enabled && oidcConfigured} />OIDC 登录</TabsTrigger>
+              <TabsTrigger value="microsoft"><StatusDot on={settings.microsoft.enabled && msConfigured} />微软登录</TabsTrigger>
             </TabsList>
 
             <TabsContent value="basic" className="pt-3 space-y-2.5">
@@ -272,16 +294,115 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
             </TabsContent>
+
+            <TabsContent value="ldap" className="pt-3 space-y-2.5">
+              <SwitchRow
+                title="启用企业账号（LDAP）登录"
+                description={ldapToggleLocked
+                  ? "先在下方填好服务器地址、Bind DN/密码与搜索库，此开关才会解锁。"
+                  : "员工用域账号密码直连目录服务校验登录；按邮箱匹配账号，不存在时自动注册（无本地密码）。"}
+                checked={settings.ldap.enabled}
+                onChange={(v) => patchLdap({ enabled: v })}
+                disabled={ldapToggleLocked}
+              />
+              {ldapToggleLocked && (
+                <LockedHint>还缺少目录服务信息：填好主机、Bind DN、Bind 密码与搜索库 Base DN 后，开关即自动解锁。</LockedHint>
+              )}
+              <div className="rounded-lg border bg-background/50 px-3.5 py-3 space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2 space-y-1.5">
+                    <label className="text-sm font-medium">服务器主机</label>
+                    <Input
+                      value={settings.ldap.host}
+                      onChange={(e) => patchLdap({ host: e.target.value })}
+                      placeholder="如 ad.corp.example.com 或 10.0.0.8"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">端口</label>
+                    <Input
+                      type="number"
+                      value={settings.ldap.port}
+                      onChange={(e) => patchLdap({ port: Number(e.target.value) || 389 })}
+                      placeholder="389 / 636"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">连接方式</label>
+                  <select
+                    className="w-full h-9 rounded-md border border-input bg-background/50 px-3 text-sm"
+                    value={settings.ldap.security}
+                    onChange={(e) => patchLdap({ security: e.target.value as AuthSettings["ldap"]["security"] })}
+                  >
+                    <option value="plain">明文（389，密码不加密传输）</option>
+                    <option value="starttls">StartTLS（389 升级加密，推荐）</option>
+                    <option value="ldaps">LDAPS（636，SSL）</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">域账号密码会经目录服务校验，建议使用 StartTLS 或 LDAPS。</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Bind DN（服务账号）</label>
+                  <Input
+                    value={settings.ldap.bindDn}
+                    onChange={(e) => patchLdap({ bindDn: e.target.value })}
+                    placeholder="如 cn=svc-readonly,ou=users,dc=corp,dc=example,dc=com"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Bind 密码</label>
+                  <Input
+                    type="password"
+                    value={ldapSecret}
+                    onChange={(e) => setLdapSecret(e.target.value)}
+                    placeholder={settings.ldap.hasClientSecret ? `已保存（${settings.ldap.clientSecretMasked ?? "••••"}），留空不修改` : "输入服务账号密码"}
+                    autoComplete="new-password"
+                  />
+                  <p className="text-xs text-muted-foreground">加密存储；提交时留空表示保留已保存的密码。</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">搜索库 Base DN</label>
+                  <Input
+                    value={settings.ldap.baseDn}
+                    onChange={(e) => patchLdap({ baseDn: e.target.value })}
+                    placeholder="如 ou=公司,dc=corp,dc=example,dc=com"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">范围过滤器（可选）</label>
+                  <Input
+                    value={settings.ldap.userFilter}
+                    onChange={(e) => patchLdap({ userFilter: e.target.value })}
+                    placeholder="如 (memberOf=cn=全员,ou=公司,dc=corp,dc=example,dc=com)"
+                  />
+                  <p className="text-xs text-muted-foreground">叠加在用户名之外的准入条件，留空表示搜索库内全员可登录。</p>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">用户名属性</label>
+                    <Input value={settings.ldap.usernameAttr} onChange={(e) => patchLdap({ usernameAttr: e.target.value })} placeholder="sAMAccountName" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">邮箱属性</label>
+                    <Input value={settings.ldap.mailAttr} onChange={(e) => patchLdap({ mailAttr: e.target.value })} placeholder="mail" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">姓名属性</label>
+                    <Input value={settings.ldap.displayNameAttr} onChange={(e) => patchLdap({ displayNameAttr: e.target.value })} placeholder="displayName" />
+                  </div>
+                </div>
+              </div>
+            </TabsContent>
           </Tabs>
 
           <div className="flex items-center justify-between gap-2 pt-1">
-            {settings.microsoft.enabled || settings.oidc.enabled ? (
-              <Badge variant="secondary" className={msConfigured || oidcConfigured ? "bg-emerald-50 text-emerald-700 border-emerald-200" : ""}>
-                {settings.microsoft.enabled && !settings.oidc.enabled
-                  ? `微软登录${msConfigured ? "已就绪" : "待配置"}`
-                  : !settings.microsoft.enabled && settings.oidc.enabled
-                    ? `OIDC 登录${oidcConfigured ? "已就绪" : "待配置"}`
-                    : `微软/OIDC ${msConfigured && oidcConfigured ? "已就绪" : "待配置"}`}
+            {settings.microsoft.enabled || settings.oidc.enabled || settings.ldap.enabled ? (
+              <Badge variant="secondary" className={msConfigured || oidcConfigured || ldapConfigured ? "bg-emerald-50 text-emerald-700 border-emerald-200" : ""}>
+                {[
+                  settings.microsoft.enabled && `微软${msConfigured ? "已就绪" : "待配置"}`,
+                  settings.oidc.enabled && `OIDC${oidcConfigured ? "已就绪" : "待配置"}`,
+                  settings.ldap.enabled && `LDAP${ldapConfigured ? "已就绪" : "待配置"}`,
+                ].filter(Boolean).join(" · ")}
               </Badge>
             ) : <span />}
             <div className="flex gap-2">

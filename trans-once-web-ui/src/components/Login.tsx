@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Rocket, ShieldCheck, Mail, Lock, User, Loader2, X, History, KeyRound } from "lucide-react";
+import { Rocket, ShieldCheck, Mail, Lock, User, Loader2, X, History, KeyRound, Building2 } from "lucide-react";
 import { motion } from "motion/react";
 import type { AuthConfig, AuthUser } from "../types";
 import { api, setToken } from "../services/api";
-import { login, loginWithMicrosoft, loginWithOidc, register } from "../lib/session";
+import { login, loginWithLdap, loginWithMicrosoft, loginWithOidc, register } from "../lib/session";
 import { refreshSession } from "../lib/session";
 import { addLoginHistory, listLoginHistory, removeLoginHistory, type LoginHistoryEntry } from "../lib/loginHistory";
 
@@ -23,6 +23,7 @@ const FALLBACK_CONFIG: AuthConfig = {
   microsoftEnabled: false,
   oidcEnabled: false,
   oidcDisplayName: "",
+  ldapEnabled: false,
 };
 
 // 桌面客户端（Electron preload 注入）提供的 OAuth 桥：app:// 页面无法注册
@@ -45,8 +46,9 @@ function MicrosoftLogo({ className }: { className?: string }) {
 }
 
 export function Login() {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "ldap">("login");
   const [email, setEmail] = useState("");
+  const [ldapUser, setLdapUser] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -91,7 +93,8 @@ export function Login() {
   const showMicrosoft = config.microsoftEnabled;
   const oidcLabel = config.oidcDisplayName?.trim() || "使用单点登录（OIDC）";
   const showOidc = config.oidcEnabled;
-  const anySso = showMicrosoft || showOidc;
+  const showLdap = config.ldapEnabled;
+  const anySso = showMicrosoft || showOidc || showLdap;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -99,6 +102,7 @@ export function Login() {
     setLoading(true);
     try {
       if (mode === "login") await login(email, password);
+      else if (mode === "ldap") await loginWithLdap(ldapUser, password);
       else await register(email, name, password);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -135,6 +139,14 @@ export function Login() {
   };
 
   const pickHistory = (entry: LoginHistoryEntry) => {
+    if (entry.provider === "ldap") {
+      if (!showLdap) return;
+      setMode("ldap");
+      setLdapUser(entry.username || "");
+      setPassword("");
+      setError(null);
+      return;
+    }
     if (entry.provider !== "password" && anySso) {
       startProvider(entry.provider === "microsoft" ? "microsoft" : "oidc");
       return;
@@ -168,7 +180,7 @@ export function Login() {
             </div>
           ) : (
             <>
-              {showPassword && showRegister && (
+              {mode !== "ldap" && showPassword && showRegister && (
                 <div className="flex gap-1 p-1 bg-muted rounded-lg mb-6">
                   {(["login", "register"] as const).map((m) => (
                     <button
@@ -183,26 +195,37 @@ export function Login() {
                 </div>
               )}
 
-              {showMicrosoft && (
+              {showLdap && (
                 <Button
                   type="button"
                   variant="outline"
                   className="w-full h-11 text-base font-semibold"
-                  onClick={() => startProvider("microsoft")}
+                  onClick={() => { setMode("ldap"); setError(null); }}
                 >
-                  <MicrosoftLogo className="w-4.5 h-4.5 mr-2" />
-                  使用微软账号登录
+                  <Building2 className="w-4.5 h-4.5 mr-2" />
+                  企业账号登录
                 </Button>
               )}
               {showOidc && (
                 <Button
                   type="button"
                   variant="outline"
-                  className={`w-full h-11 text-base font-semibold ${showMicrosoft ? "mt-3" : ""}`}
+                  className={`w-full h-11 text-base font-semibold ${showLdap ? "mt-3" : ""}`}
                   onClick={() => startProvider("oidc")}
                 >
                   <KeyRound className="w-4.5 h-4.5 mr-2" />
                   {oidcLabel}
+                </Button>
+              )}
+              {showMicrosoft && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={`w-full h-11 text-base font-semibold ${showOidc || showLdap ? "mt-3" : ""}`}
+                  onClick={() => startProvider("microsoft")}
+                >
+                  <MicrosoftLogo className="w-4.5 h-4.5 mr-2" />
+                  使用微软账号登录
                 </Button>
               )}
               {anySso && showPassword && (
@@ -213,7 +236,39 @@ export function Login() {
                 </div>
               )}
 
-              {showPassword ? (
+              {mode === "ldap" ? (
+                <form onSubmit={submit} className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium ml-1">域账号用户名</label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input value={ldapUser} onChange={(e) => setLdapUser(e.target.value)} placeholder="企业域账号，如 wanghb" className="pl-10 h-11 bg-background/50" required autoFocus />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium ml-1">域账号密码</label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="域账号密码" className="pl-10 h-11 bg-background/50" required />
+                    </div>
+                  </div>
+
+                  {error && <p className="text-sm text-destructive bg-destructive/10 rounded-md px-3 py-2">{error}</p>}
+
+                  <Button type="submit" className="w-full h-11 text-base font-semibold shadow-lg shadow-primary/20" disabled={loading}>
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "登 录"}
+                  </Button>
+                  <div className="pt-1 text-center">
+                    <button
+                      type="button"
+                      className="text-xs text-primary hover:underline"
+                      onClick={() => { setMode("login"); setPassword(""); setError(null); }}
+                    >
+                      ← 返回其它登录方式
+                    </button>
+                  </div>
+                </form>
+              ) : showPassword ? (
                 <form onSubmit={submit} className="space-y-4">
                   {mode === "register" && (
                     <div className="space-y-2">
@@ -272,7 +327,9 @@ export function Login() {
                     <History className="w-3.5 h-3.5" /> 近期登录账号（仅本机记录）
                   </p>
                   {history.map((entry) => {
-                    const clickable = (entry.provider !== "password" && anySso) || showPassword;
+                    const clickable = entry.provider === "ldap"
+                      ? showLdap
+                      : (entry.provider !== "password" && anySso) || showPassword;
                     return (
                       <div key={entry.email} className={`group flex items-center gap-2 rounded-md border bg-background/50 px-2.5 py-1.5 ${clickable ? "hover:bg-muted/60 cursor-pointer" : "opacity-50"}`} onClick={() => clickable && pickHistory(entry)}>
                         <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold shrink-0">
@@ -284,6 +341,7 @@ export function Login() {
                         </div>
                         {entry.provider === "microsoft" && <MicrosoftLogo className="w-3 h-3 shrink-0" />}
                         {entry.provider === "oidc" && <KeyRound className="w-3 h-3 shrink-0 text-muted-foreground" />}
+                        {entry.provider === "ldap" && <Building2 className="w-3 h-3 shrink-0 text-muted-foreground" />}
                         <button
                           type="button"
                           title="忘记此账号"

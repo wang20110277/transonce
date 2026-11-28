@@ -6,6 +6,7 @@ import urllib.parse
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 import db
+import ldap_client
 import microsoft_client
 import oidc_client
 import platform_settings
@@ -148,6 +149,31 @@ def login(request: Request, body: dict = Body(...)):
         raise HTTPException(401, "邮箱或密码错误")
     if user.get("status") == "disabled":
         raise HTTPException(403, "账号已被禁用")
+    _login_failures.pop(key, None)
+    return {"token": create_token(str(user["id"])), "user": _public_user(user)}
+
+
+@router.post("/ldap/login")
+def ldap_login(request: Request, body: dict = Body(...)):
+    """企业账号（LDAP/AD）登录：域账号密码直连校验，首次登录自动建号。
+
+    与密码登录共用同一套限流；凭证错误计失败次数，服务/配置问题不计。
+    """
+    settings = platform_settings.get_auth_settings()
+    if not platform_settings.ldap_ready(settings):
+        raise HTTPException(403, "平台未开启企业账号（LDAP）登录")
+    username = (body.get("username") or "").strip()
+    key = _rate_limit_key(request, username)
+    _assert_login_allowed(key)
+    try:
+        profile = ldap_client.authenticate(
+            settings.get("ldap") or {}, username, body.get("password") or "",
+        )
+    except ldap_client.LdapError as e:
+        if e.status == 401:
+            _login_failures.setdefault(key, []).append(time.monotonic())
+        raise HTTPException(e.status, str(e))
+    user = _upsert_provider_user(profile["email"], profile["displayName"], "ldap")
     _login_failures.pop(key, None)
     return {"token": create_token(str(user["id"])), "user": _public_user(user)}
 

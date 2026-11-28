@@ -6,3 +6,4 @@ python-dotenv==1.2.2
 psycopg2-binary==2.9.12
 alembic==1.18.4
 SQLAlchemy==2.0.50
+ldap3>=2.9,<3
