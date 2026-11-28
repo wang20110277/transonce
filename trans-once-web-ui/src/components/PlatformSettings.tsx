@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { AuthSettings, PlatformUser } from "../types";
 import { api } from "../services/api";
-import { refreshSession, useSession } from "../lib/session";
+import { useSession } from "../lib/session";
 import { Modal, SwitchRow } from "./common";
 
 // 平台登录设置（仅超级管理员）：密码登录 / 注册开关，微软与通用 OIDC 客户端配置。
@@ -50,24 +50,38 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
       .catch(() => setUsers([]));
   }, []);
 
-  const currentAdmin = users.find((u) => u.isSuperAdmin);
+  const currentAdmins = users.filter((u) => u.isSuperAdmin);
   const candidates = users.filter((u) => !u.isSuperAdmin && u.status !== "disabled");
 
-  const transfer = async () => {
+  const refreshUsers = () => api.auth.platformUsers().then((r) => setUsers(r.items)).catch(() => {});
+
+  const grant = async () => {
     const target = candidates.find((u) => u.id === targetId);
     if (!target) return;
-    if (!confirm(`确定把超级管理员转让给 ${target.name}（${target.email}）？\n\n转让后你将立即降为普通用户，并失去本设置页的访问权。`)) return;
+    if (!confirm(`确定把 ${target.name}（${target.email}）设为超级管理员？`)) return;
     setTransferring(true);
     setError(null);
     try {
-      await api.auth.transferSuperAdmin(targetId);
-      await refreshSession();
-      alert(`超级管理员已转让给 ${target.name}（${target.email}）。`);
-      onClose();
+      await api.auth.grantSuperAdmin(targetId);
+      setToast(`已把 ${target.name} 设为超级管理员`);
+      setTargetId("");
+      await refreshUsers();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setTransferring(false);
+    }
+  };
+
+  const revoke = async (u: PlatformUser) => {
+    if (!confirm(`确定撤销 ${u.name}（${u.email}）的超级管理员身份？`)) return;
+    setError(null);
+    try {
+      await api.auth.revokeSuperAdmin(u.id);
+      setToast(`已撤销 ${u.name} 的超级管理员身份`);
+      await refreshUsers();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -197,38 +211,53 @@ export function PlatformSettings({ onClose }: { onClose: () => void }) {
               <div className="rounded-lg border bg-background/50 px-3.5 py-3 space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  超级管理员：{currentAdmin ? `${currentAdmin.name}（${currentAdmin.email}）` : me ? `${me.name}（${me.email}）` : "—"}
+                  超级管理员（{currentAdmins.length} 名）
+                </div>
+                <div className="space-y-1">
+                  {currentAdmins.map((u) => (
+                    <div key={u.id} className="flex items-center justify-between rounded-md bg-muted/50 px-2.5 py-1.5">
+                      <span className="text-xs truncate">
+                        {u.name}（{u.email}）{u.id === me?.id ? " · 你" : ""}
+                      </span>
+                      {u.id !== me?.id && (
+                        <button
+                          type="button"
+                          className="text-[11px] text-destructive hover:underline shrink-0 ml-2"
+                          onClick={() => revoke(u)}
+                        >
+                          撤销
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  平台始终只有一个超级管理员。把身份转让给其他用户后，你将立即降为普通用户并失去本设置页的访问权；对方下次登录即拥有全部平台权限。
+                  平台可以有多个超级管理员，互不影响。若全部超管无法登录，可直连数据库把某用户 is_super_admin 置为 TRUE 应急。
                 </p>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">转让给</label>
-                  <select
-                    value={targetId}
-                    onChange={(e) => setTargetId(e.target.value)}
-                    className="w-full h-10 rounded-md border bg-background/50 px-2 text-sm"
-                  >
-                    <option value="">选择用户…</option>
-                    {candidates.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name}（{u.email}）{u.authProvider === "ldap" ? " · 域账号" : ""}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="text-sm font-medium">指定为超级管理员</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={targetId}
+                      onChange={(e) => setTargetId(e.target.value)}
+                      className="flex-1 h-10 rounded-md border bg-background/50 px-2 text-sm"
+                    >
+                      <option value="">选择用户…</option>
+                      {candidates.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}（{u.email}）{u.authProvider === "ldap" ? " · 域账号" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <Button variant="outline" disabled={!targetId || transferring} onClick={grant}>
+                      {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      指定
+                    </Button>
+                  </div>
                   {candidates.length === 0 && (
-                    <p className="text-xs text-muted-foreground">暂无可转让的用户（需为未禁用的普通用户）。</p>
+                    <p className="text-xs text-muted-foreground">暂无可指定的用户（需为未禁用的普通用户）。</p>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  className="text-destructive hover:text-destructive"
-                  disabled={!targetId || transferring}
-                  onClick={transfer}
-                >
-                  {transferring ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                  转让并退出设置
-                </Button>
               </div>
             </TabsContent>
 

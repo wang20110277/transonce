@@ -264,45 +264,61 @@ def list_users(q: str = Query(default=""), user: dict = Depends(get_current_user
     return {"items": [serializers.user(r) for r in rows]}
 
 
-@router.put("/transfer-super-admin")
-def transfer_super_admin(body: dict = Body(...), user: dict = Depends(get_current_user)):
-    """把超级管理员身份转让给另一用户；转让成功后原超管立即降为普通用户。
-
-    平台恒只有一个超管：单条语句内完成「提升目标 + 其余全部降级」，
-    目标提升失败时不会降级任何人（避免出现零超管）。
-    """
+@router.put("/super-admins")
+def grant_super_admin(body: dict = Body(...), user: dict = Depends(get_current_user)):
+    """授予另一用户超级管理员身份（平台可有多个超管，原超管不受影响）。"""
     if not user.get("is_super_admin"):
-        raise HTTPException(403, "只有超级管理员可以转让超级管理员身份")
+        raise HTTPException(403, "只有超级管理员可以指定超级管理员")
     target_id = str(body.get("userId") or "").strip()
     if not target_id:
-        raise HTTPException(400, "请选择要接收超级管理员身份的用户")
+        raise HTTPException(400, "请选择要指定为超级管理员的用户")
     if target_id == str(user["id"]):
-        raise HTTPException(400, "超级管理员已经是你本人，无需转让")
+        raise HTTPException(400, "你本人已经是超级管理员")
     target = db.fetch_one("SELECT * FROM users WHERE id=%s", (target_id,))
     if not target:
         raise HTTPException(404, "目标用户不存在")
     if target.get("status") == "disabled":
         raise HTTPException(400, "目标用户已被禁用，不能授予超级管理员")
-    db.execute(
-        """WITH promoted AS (
-               UPDATE users SET is_super_admin=TRUE
-               WHERE id=%s AND status<>'disabled' RETURNING id
-           )
-           UPDATE users SET is_super_admin=FALSE
-           WHERE (SELECT count(*) FROM promoted)=1
-             AND is_super_admin AND id NOT IN (SELECT id FROM promoted)""",
-        (target_id,),
-    )
-    new_admin = db.fetch_one("SELECT * FROM users WHERE is_super_admin")
-    if not new_admin or str(new_admin["id"]) != target_id:
-        raise HTTPException(500, "转让未生效，请重试")
+    if not target.get("is_super_admin"):
+        db.execute("UPDATE users SET is_super_admin=TRUE WHERE id=%s", (target_id,))
     log_activity(
-        None, "auth.super_admin_transferred",
-        {"fromUserId": str(user["id"]), "fromEmail": user["email"],
-         "toUserId": target_id, "toEmail": target["email"]},
+        None, "auth.super_admin_granted",
+        {"byUserId": str(user["id"]), "toUserId": target_id, "toEmail": target["email"]},
         actor_id=str(user["id"]),
     )
-    return {"superAdmin": serializers.user(new_admin)}
+    granted = db.fetch_one("SELECT * FROM users WHERE id=%s", (target_id,))
+    return {"superAdmin": serializers.user(granted)}
+
+
+@router.delete("/super-admins/{target_id}")
+def revoke_super_admin(target_id: str, user: dict = Depends(get_current_user)):
+    """撤销某用户的超级管理员身份；不能撤销自己，且至少保留一名超管。
+
+    应急通道：全部超管不可登录时，可直接在数据库把某用户
+    is_super_admin 置为 TRUE 恢复管理权。
+    """
+    if not user.get("is_super_admin"):
+        raise HTTPException(403, "只有超级管理员可以撤销超级管理员")
+    if target_id == str(user["id"]):
+        raise HTTPException(400, "不能撤销自己的超级管理员身份")
+    target = db.fetch_one("SELECT * FROM users WHERE id=%s", (target_id,))
+    if not target:
+        raise HTTPException(404, "目标用户不存在")
+    if not target.get("is_super_admin"):
+        return {"ok": True}
+    remaining = db.fetch_one(
+        "SELECT count(*) AS c FROM users WHERE is_super_admin AND id<>%s AND status<>'disabled'",
+        (target_id,),
+    )["c"]
+    if remaining < 1:
+        raise HTTPException(400, "平台至少保留一名超级管理员；全部失联时可直连数据库把 is_super_admin 置位应急")
+    db.execute("UPDATE users SET is_super_admin=FALSE WHERE id=%s", (target_id,))
+    log_activity(
+        None, "auth.super_admin_revoked",
+        {"byUserId": str(user["id"]), "fromUserId": target_id, "fromEmail": target["email"]},
+        actor_id=str(user["id"]),
+    )
+    return {"ok": True}
 
 
 # --- redirect-based identity providers (Microsoft + generic OIDC) --------
