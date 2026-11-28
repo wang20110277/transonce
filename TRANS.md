@@ -8,8 +8,11 @@ TransOnce 是一站式、多租户、Agent 编排的软件研发交付平台：�
 
 ```bash
 # 后端依赖与数据库
+# 本地基础设施（Docker：PostgreSQL 16 / Redis 7 / MinIO，端口绑 127.0.0.1，数据在命名卷）
+docker compose up -d        # 首次建库后仍需下面两步：.env 与 alembic 迁移
+
+# 后端依赖与数据库
 pip3 install -r trans-once/requirements.txt
-createdb transonce
 cp trans-once/.env.example trans-once/.env      # 改 DATABASE_URL / AGENT_PROVIDER / SECRET_KEY
 (cd trans-once && python3 -m alembic upgrade head)
 
