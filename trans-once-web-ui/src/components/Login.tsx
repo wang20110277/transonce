@@ -242,7 +242,7 @@ export function Login() {
                     <label className="text-sm font-medium ml-1">域账号用户名</label>
                     <div className="relative">
                       <User className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input value={ldapUser} onChange={(e) => setLdapUser(e.target.value)} placeholder="企业域账号，如 wanghb" className="pl-10 h-11 bg-background/50" required autoFocus />
+                      <Input value={ldapUser} onChange={(e) => setLdapUser(e.target.value)} placeholder="企业域账号" className="pl-10 h-11 bg-background/50" required autoFocus />
                     </div>
                   </div>
                   <div className="space-y-2">
