@@ -72,7 +72,7 @@ export function MeetingIngest() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="会议纪要"
+        title="沟通管理"
         description="录入会议原始纪要，Agent 会自动提取带验收标准的需求；你挑选后再进入研发链路。"
         actions={<Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="w-4 h-4 mr-2" /> 录入会议</Button>}
       />

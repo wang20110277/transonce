@@ -40,10 +40,15 @@ type ViewId =
 const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementType; perm: string }[] }[] = [
   { group: "总览", items: [{ id: "dashboard", label: "工作台", icon: LayoutDashboard, perm: "dashboard" }] },
   {
-    group: "研发",
+    group: "立项",
     items: [
       { id: "projects", label: "项目管理", icon: FolderKanban, perm: "projects" },
-      { id: "meetings", label: "会议纪要", icon: CalendarClock, perm: "meetings" },
+    ],
+  },
+  {
+    group: "研发",
+    items: [
+      { id: "meetings", label: "沟通管理", icon: CalendarClock, perm: "meetings" },
       { id: "requirements", label: "需求管理", icon: FileText, perm: "requirements" },
       { id: "development", label: "研发管理", icon: ListChecks, perm: "development" },
       { id: "testing", label: "测试管理", icon: TestTube2, perm: "testing" },
@@ -82,7 +87,7 @@ const NAV: { group: string; items: { id: ViewId; label: string; icon: ElementTyp
 ];
 
 const TITLES: Record<ViewId, string> = {
-  dashboard: "工作台", projects: "项目管理", meetings: "会议纪要", requirements: "需求管理",
+  dashboard: "工作台", projects: "项目管理", meetings: "沟通管理", requirements: "需求管理",
   development: "研发管理", testing: "测试管理", repos: "代码管理", artifacts: "制品管理", pipelines: "持续集成",
   deployment: "部署管理", environments: "环境配置", monitoring: "运维监控", alerts: "告警中心",
   "alert-settings": "告警配置",
