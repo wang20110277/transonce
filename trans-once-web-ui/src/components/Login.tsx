@@ -299,11 +299,6 @@ export function Login() {
                   <Button type="submit" className="w-full h-11 text-base font-semibold shadow-lg shadow-primary/20" disabled={loading}>
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : mode === "login" ? "登 录" : "创建账号"}
                   </Button>
-                  {mode === "login" && (
-                    <div className="pt-1 text-center text-xs text-muted-foreground">
-                      <p>初始账号：admin@transonce.local / admin123（超级管理员）</p>
-                    </div>
-                  )}
                 </form>
               ) : (
                 <div className="space-y-3">
