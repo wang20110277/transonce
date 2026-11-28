@@ -78,11 +78,14 @@ animation:r 1s linear infinite}@keyframes r{to{transform:rotate(360deg)}}</style
 ${body}`, {status, headers: {'content-type': 'text/html; charset=utf-8'}});
 }
 
-const LOADING_PAGE = page(`<div style="text-align:center"><div class="spin"></div>
-<p>正在连接 TransOnce 后端<br><code>${BACKEND}</code></p></div>`);
+// Response 的 body 流是一次性的（只能被读一次）：不能在模块级缓存 Response
+// 对象，否则关窗后再次 boot() 复用同一对象会抛 "ReadableStream is locked"，
+// 页面加载失败。因此这里保存 HTML 字符串，每次请求用 page() 现建 Response。
+const LOADING_HTML = `<div style="text-align:center"><div class="spin"></div>
+<p>正在连接 TransOnce 后端<br><code>${BACKEND}</code></p></div>`;
 
 // 后端未就绪时的引导页：自动轮询健康检查，恢复后跳回应用。
-const ERROR_PAGE = page(`<div style="text-align:center">
+const ERROR_HTML = `<div style="text-align:center">
 <h1 style="font-size:18px;margin:0 0 8px">无法连接后端</h1>
 <p>请确认后端已启动：<code>cd trans-once && ./start.sh</code><br>目标地址：<code>${BACKEND}</code></p>
 <p style="color:#a1a1aa;font-size:12px">连接恢复后将自动进入应用…</p>
@@ -91,7 +94,7 @@ const tick = async () => {
   try { const s = await (await fetch('/__desktop/health')).json(); if (s.ok) location.replace('/'); } catch {}
 };
 setInterval(tick, 2000); tick();
-</script></div>`);
+</script></div>`;
 
 async function backendUp() {
   try {
@@ -110,8 +113,8 @@ function autostartBackend() {
 
 function handleApp(req) {
   const p = decodeURIComponent(new URL(req.url).pathname);
-  if (p === '/__desktop/loading') return LOADING_PAGE;
-  if (p === '/__desktop/error') return ERROR_PAGE;
+  if (p === '/__desktop/loading') return page(LOADING_HTML);
+  if (p === '/__desktop/error') return page(ERROR_HTML);
   if (p === '/__desktop/health') {
     return backendUp().then((ok) => new Response(JSON.stringify({ok}), {headers: {'content-type': 'application/json'}}));
   }
@@ -251,8 +254,15 @@ function smokeCheck() {
   win.loadURL('app://local/');
 }
 
+let appProtocolReady = false;
+
 async function boot() {
-  protocol.handle('app', handleApp);
+  // app:// 处理器每个应用只能注册一次：macOS 关窗不退出进程，再次激活会
+  // 重新进入 boot()，重复注册会抛异常导致窗口无法再打开。
+  if (!appProtocolReady) {
+    protocol.handle('app', handleApp);
+    appProtocolReady = true;
+  }
   createWindow();
   // 验证模式 --screenshot=/path/to.png：应用页渲染后截图留证并自动退出。
   if (SCREENSHOT) {
@@ -311,6 +321,10 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== 'darwin') app.quit();
   });
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) boot();
+    if (BrowserWindow.getAllWindows().length === 0) return boot();
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
   });
 }
